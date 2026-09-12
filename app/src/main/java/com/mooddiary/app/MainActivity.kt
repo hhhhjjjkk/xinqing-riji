@@ -1,11 +1,15 @@
 package com.mooddiary.app
 
+import android.Manifest
 import android.app.Application
 import android.app.DatePickerDialog
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -27,6 +31,8 @@ import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -102,7 +108,17 @@ val moods = listOf(
 fun moodOf(id: Int) = moods.firstOrNull { it.id == id } ?: moods[2]
 
 class MainActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) { super.onCreate(savedInstanceState); enableEdgeToEdge(); setContent { MoodDiaryTheme { MoodDiaryApp() } } }
+    private val openHour = mutableStateOf<Int?>(null)
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState); enableEdgeToEdge()
+        openHour.value = intent.getIntExtra(EXTRA_HOUR, -1).takeIf { it >= 0 }
+        setContent { MoodDiaryTheme { MoodDiaryApp(openHour = openHour) } }
+    }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        intent.getIntExtra(EXTRA_HOUR, -1).takeIf { it >= 0 }?.let { openHour.value = it }
+    }
+    companion object { const val EXTRA_HOUR = "extra_hour" }
 }
 
 @Composable fun MoodDiaryTheme(content: @Composable () -> Unit) {
@@ -111,7 +127,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable fun MoodDiaryApp(vm: MoodViewModel = androidx.lifecycle.viewmodel.compose.viewModel()) {
+@Composable fun MoodDiaryApp(vm: MoodViewModel = androidx.lifecycle.viewmodel.compose.viewModel(), openHour: MutableState<Int?> = mutableStateOf(null)) {
     val entries by vm.entries.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var month by rememberSaveable { mutableStateOf(YearMonth.now()) }
@@ -120,8 +136,11 @@ class MainActivity : ComponentActivity() {
 
     fun openEdit(date: LocalDate, hour: Int) { editTarget = Triple(date, hour, entries.firstOrNull { it.date == date.toString() && it.hour == hour }) }
 
+    // 点击通知跳转：直接打开当前小时的记录弹窗
+    LaunchedEffect(openHour.value) { openHour.value?.let { h -> openEdit(LocalDate.now(), h); openHour.value = null } }
+
     Scaffold(
-        topBar = { CenterAlignedTopAppBar(title = { Text("心情日记", fontWeight = FontWeight.Bold) }) },
+        topBar = { CenterAlignedTopAppBar(title = { Text("心情日记", fontWeight = FontWeight.Bold) }, actions = { ReminderToggle() }) },
         bottomBar = { NavigationBar { listOf("日历" to Icons.Default.CalendarMonth, "记录" to Icons.Default.List, "统计" to Icons.Default.BarChart).forEachIndexed { i, item -> NavigationBarItem(selected = tab == i, onClick = { tab = i }, icon = { Icon(item.second, null) }, label = { Text(item.first) }) } } },
         floatingActionButton = { if (tab != 2) FloatingActionButton(onClick = { openEdit(LocalDate.now(), java.time.LocalTime.now().hour) }) { Icon(Icons.Default.Add, "新增记录") } }
     ) { padding ->
@@ -240,3 +259,23 @@ class MainActivity : ComponentActivity() {
         confirmButton={TextButton(onClick={onSave(d,hour,selected,note)}){Text("保存")}},
         dismissButton={Row { if(entry!=null) TextButton(onClick=onDelete){Icon(Icons.Default.Delete,null); Text("删除")}; TextButton(onClick=onDismiss){Text("取消")} }})
 }
+
+@Composable fun ReminderToggle() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var enabled by remember { mutableStateOf(Reminder.isEnabled(context)) }
+    fun enable() { Reminder.setEnabled(context, true); enabled = true; toast(context, "已开启每小时心情提醒") }
+    val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) enable() else toast(context, "需要通知权限才能提醒你记录心情")
+    }
+    IconButton(onClick = {
+        if (enabled) { Reminder.setEnabled(context, false); enabled = false; toast(context, "已关闭每小时心情提醒") }
+        else if (Reminder.hasNotificationPermission(context)) enable()
+        else permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }) {
+        Icon(if (enabled) Icons.Default.Notifications else Icons.Default.NotificationsOff,
+            if (enabled) "关闭每小时提醒" else "开启每小时提醒",
+            tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+private fun toast(context: android.content.Context, msg: String) = android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()

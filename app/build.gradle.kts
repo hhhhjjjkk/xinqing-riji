@@ -11,8 +11,8 @@ android {
         applicationId = "com.mooddiary.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 5
-        versionName = "1.2.2"
+        versionCode = 6
+        versionName = "1.3.0"
     }
     signingConfigs {
         create("release") {
@@ -52,6 +52,7 @@ dependencies {
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     kapt("androidx.room:room-compiler:2.6.1")
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
