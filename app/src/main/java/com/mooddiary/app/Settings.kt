@@ -15,8 +15,35 @@ enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
 enum class WeekStart { SUNDAY, MONDAY }
 
+/** 主题强调色预设 */
+enum class AccentColor {
+    AMBER, BLUE, GREEN, PURPLE, PINK;
+
+    fun label() = when (this) {
+        AMBER -> "琥珀"; BLUE -> "静蓝"; GREEN -> "青绿"
+        PURPLE -> "紫罗兰"; PINK -> "樱粉"
+    }
+}
+
+/** 启动默认页 */
+enum class StartTab { CALENDAR, RECORDS, STATS, SETTINGS;
+
+    fun label() = when (this) {
+        CALENDAR -> "日历"; RECORDS -> "记录"; STATS -> "统计"; SETTINGS -> "设置"
+    }
+    fun index() = ordinal
+}
+
+/** 点击日历某天时的行为 */
+enum class CalendarTapAction { OPEN_DAY_BOARD, QUICK_LOG_NOW }
+
 data class AppSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val accentColor: AccentColor = AccentColor.AMBER,
+    val useDynamicColor: Boolean = false,   // Android 12+ 从壁纸取色
+    val startTab: StartTab = StartTab.CALENDAR,
+    val calendarShowNote: Boolean = false,  // 日历格子显示备注摘要
+    val calendarTapAction: CalendarTapAction = CalendarTapAction.OPEN_DAY_BOARD,
     val reminderEnabled: Boolean = false,
     val quietHoursEnabled: Boolean = false,
     val quietStart: Int = 22,
@@ -58,6 +85,12 @@ class SettingsStore(context: Context) {
 
     private fun read(): AppSettings = AppSettings(
         themeMode = ThemeMode.entries.getOrElse(prefs.getInt(KEY_THEME, 0)) { ThemeMode.SYSTEM },
+        accentColor = AccentColor.entries.getOrElse(prefs.getInt(KEY_ACCENT, 0)) { AccentColor.AMBER },
+        useDynamicColor = prefs.getBoolean(KEY_DYNAMIC, false),
+        startTab = StartTab.entries.getOrElse(prefs.getInt(KEY_START_TAB, 0)) { StartTab.CALENDAR },
+        calendarShowNote = prefs.getBoolean(KEY_CAL_NOTE, false),
+        calendarTapAction = CalendarTapAction.entries
+            .getOrElse(prefs.getInt(KEY_CAL_TAP, 0)) { CalendarTapAction.OPEN_DAY_BOARD },
         reminderEnabled = prefs.getBoolean(KEY_REMINDER, false),
         quietHoursEnabled = prefs.getBoolean(KEY_QUIET_ENABLED, false),
         quietStart = prefs.getInt(KEY_QUIET_START, 22),
@@ -71,6 +104,11 @@ class SettingsStore(context: Context) {
     }
 
     fun setThemeMode(mode: ThemeMode) = commit { putInt(KEY_THEME, mode.ordinal) }
+    fun setAccentColor(color: AccentColor) = commit { putInt(KEY_ACCENT, color.ordinal) }
+    fun setUseDynamicColor(enabled: Boolean) = commit { putBoolean(KEY_DYNAMIC, enabled) }
+    fun setStartTab(tab: StartTab) = commit { putInt(KEY_START_TAB, tab.ordinal) }
+    fun setCalendarShowNote(enabled: Boolean) = commit { putBoolean(KEY_CAL_NOTE, enabled) }
+    fun setCalendarTapAction(action: CalendarTapAction) = commit { putInt(KEY_CAL_TAP, action.ordinal) }
     fun setReminderEnabled(enabled: Boolean) {
         commit { putBoolean(KEY_REMINDER, enabled) }
         Reminder.setEnabled(appContext, enabled)
@@ -98,6 +136,11 @@ class SettingsStore(context: Context) {
         private const val KEY_QUIET_END = "quiet_end"
         private const val KEY_DEFAULT_MOOD = "default_mood"
         private const val KEY_WEEK_START = "week_start"
+        private const val KEY_ACCENT = "accent_color"
+        private const val KEY_DYNAMIC = "dynamic_color"
+        private const val KEY_START_TAB = "start_tab"
+        private const val KEY_CAL_NOTE = "calendar_show_note"
+        private const val KEY_CAL_TAP = "calendar_tap_action"
     }
 }
 

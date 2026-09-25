@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Application
 import android.app.DatePickerDialog
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -242,8 +243,16 @@ class MainActivity : ComponentActivity() {
         store.syncReminder()
         setContent {
             val settings by store.settings.collectAsStateWithLifecycle(initialValue = store.current())
-            MoodDiaryTheme(themeMode = settings.themeMode) {
-                MoodDiaryApp(openHour = openHour, settingsStore = store)
+            MoodDiaryTheme(
+                themeMode = settings.themeMode,
+                accentColor = settings.accentColor,
+                useDynamicColor = settings.useDynamicColor
+            ) {
+                MoodDiaryApp(
+                    openHour = openHour,
+                    settingsStore = store,
+                    startTab = settings.startTab.index()
+                )
             }
         }
     }
@@ -258,21 +267,45 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/** 各主题色预设的强调色（浅/深两套） */
+private fun accentSeed(color: AccentColor): androidx.compose.ui.graphics.Color = when (color) {
+    AccentColor.AMBER -> Color(0xFFE48600)
+    AccentColor.BLUE -> Color(0xFF2B54A8)
+    AccentColor.GREEN -> Color(0xFF2E7D5B)
+    AccentColor.PURPLE -> Color(0xFF7A4FA3)
+    AccentColor.PINK -> Color(0xFFC2185B)
+}
+
+private fun darkSeed(color: AccentColor): androidx.compose.ui.graphics.Color = when (color) {
+    AccentColor.AMBER -> Color(0xFFFFB300)
+    AccentColor.BLUE -> Color(0xFF7EA6E8)
+    AccentColor.GREEN -> Color(0xFF5FC99A)
+    AccentColor.PURPLE -> Color(0xFFC4A3E8)
+    AccentColor.PINK -> Color(0xFFFF8CA8)
+}
+
 @Composable
-fun MoodDiaryTheme(themeMode: ThemeMode = ThemeMode.SYSTEM, content: @Composable () -> Unit) {
+fun MoodDiaryTheme(
+    themeMode: ThemeMode = ThemeMode.SYSTEM,
+    accentColor: AccentColor = AccentColor.AMBER,
+    useDynamicColor: Boolean = false,
+    content: @Composable () -> Unit
+) {
     val dark = shouldUseDarkTheme(themeMode)
-    MaterialTheme(
-        colorScheme = if (dark) {
-            darkColorScheme(primary = Color(0xFFFFB300), secondary = Color(0xFFFFCC66))
-        } else {
-            lightColorScheme(
-                primary = Color(0xFFE48600),
-                secondary = Color(0xFF9A6100),
-                tertiary = Color(0xFF4F6F42)
-            )
-        },
-        content = content
-    )
+    val context = LocalContext.current
+
+    // Android 12+ 且用户开启时，从壁纸取色
+    val dynamicAvailable = Build.VERSION.SDK_INT >= 31
+    val canDynamic = useDynamicColor && dynamicAvailable
+
+    val colorScheme = when {
+        canDynamic && dark -> dynamicDarkColorScheme(context)
+        canDynamic && !dark -> dynamicLightColorScheme(context)
+        dark -> darkColorScheme(primary = darkSeed(accentColor))
+        else -> lightColorScheme(primary = accentSeed(accentColor))
+    }
+
+    MaterialTheme(colorScheme = colorScheme, content = content)
 }
 
 /** 待用户确认的覆盖请求 */
@@ -290,13 +323,14 @@ private data class PendingConflict(
 fun MoodDiaryApp(
     vm: MoodViewModel = androidx.lifecycle.viewmodel.compose.viewModel(),
     openHour: MutableState<Int?> = mutableStateOf(null),
-    settingsStore: SettingsStore? = null
+    settingsStore: SettingsStore? = null,
+    startTab: Int = 0
 ) {
     val context = LocalContext.current
     val store = settingsStore ?: remember { SettingsStore(context) }
     val settings by store.settings.collectAsStateWithLifecycle(initialValue = store.current())
     val entries by vm.entries.collectAsStateWithLifecycle()
-    var tab by rememberSaveable { mutableIntStateOf(0) }
+    var tab by rememberSaveable(startTab) { mutableIntStateOf(startTab) }
     var month by rememberSaveable { mutableStateOf(YearMonth.now()) }
     var hourSheetDate by remember { mutableStateOf<LocalDate?>(null) }
     var editTarget by remember { mutableStateOf<Triple<LocalDate, Int, MoodEntry?>?>(null) }
@@ -351,8 +385,15 @@ fun MoodDiaryApp(
                 0 -> CalendarPage(
                     month, entries,
                     weekStart = settings.weekStart,
+                    showNote = settings.calendarShowNote,
                     setMonth = { month = it },
-                    open = { d -> hourSheetDate = d }
+                    open = { d ->
+                        when (settings.calendarTapAction) {
+                            CalendarTapAction.OPEN_DAY_BOARD -> hourSheetDate = d
+                            CalendarTapAction.QUICK_LOG_NOW ->
+                                openEdit(LocalDate.now(), LocalTime.now().hour)
+                        }
+                    }
                 )
                 1 -> RecordsPage(entries) { e -> openEdit(LocalDate.parse(e.date), e.hour) }
                 2 -> StatsPage(month, entries, { month = it })
@@ -446,6 +487,7 @@ fun CalendarPage(
     month: YearMonth,
     entries: List<MoodEntry>,
     weekStart: WeekStart = WeekStart.SUNDAY,
+    showNote: Boolean = false,
     setMonth: (YearMonth) -> Unit,
     open: (LocalDate) -> Unit
 ) {
@@ -498,7 +540,11 @@ fun CalendarPage(
                     Box(Modifier.weight(1f).aspectRatio(0.82f).padding(2.dp)) {
                         if (day in 1..month.lengthOfMonth()) {
                             val d = month.atDay(day)
-                            CalendarCell(d, latestByDay[d.toString()], d == LocalDate.now()) { open(d) }
+                            CalendarCell(
+                                d, latestByDay[d.toString()],
+                                today = d == LocalDate.now(),
+                                showNote = showNote
+                            ) { open(d) }
                         }
                     }
                 }
@@ -515,7 +561,13 @@ fun CalendarPage(
 }
 
 @Composable
-fun CalendarCell(date: LocalDate, entry: MoodEntry?, today: Boolean, click: () -> Unit) {
+fun CalendarCell(
+    date: LocalDate,
+    entry: MoodEntry?,
+    today: Boolean,
+    showNote: Boolean = false,
+    click: () -> Unit
+) {
     val mood = entry?.let { moodOf(it.moodId) }
     val bg = mood?.color ?: MaterialTheme.colorScheme.surfaceVariant
     val textColor =
@@ -538,6 +590,17 @@ fun CalendarCell(date: LocalDate, entry: MoodEntry?, today: Boolean, click: () -
                 fontWeight = if (today) FontWeight.Bold else FontWeight.Normal
             )
             if (mood != null) Text(mood.emoji, fontSize = 15.sp)
+            // 可选：在格子里显示备注摘要
+            if (showNote && entry != null && entry.note.isNotBlank()) {
+                Text(
+                    entry.note.trim(),
+                    fontSize = 6.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = textColor.copy(alpha = 0.85f),
+                    textAlign = TextAlign.Center
+                )
+            }
         }
     }
 }

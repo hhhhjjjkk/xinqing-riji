@@ -80,6 +80,69 @@ fun SettingsPage(
             }
         }
 
+        // 个性化：主题色 / 动态取色
+        SettingsSection("个性化") {
+            SettingLabel("主题色")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AccentColor.entries.forEach { c ->
+                    FilterChip(
+                        selected = settings.accentColor == c,
+                        onClick = {
+                            store.setAccentColor(c)
+                            android.widget.Toast.makeText(context, "主题色：${c.label()}", android.widget.Toast.LENGTH_SHORT).show()
+                        },
+                        label = { Text(c.label()) }
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            if (android.os.Build.VERSION.SDK_INT >= 31) {
+                SwitchRow(
+                    title = "跟随壁纸取色",
+                    subtitle = "Android 12+ 用系统壁纸颜色，会覆盖上面的主题色",
+                    checked = settings.useDynamicColor,
+                    onCheckedChange = { store.setUseDynamicColor(it) }
+                )
+            } else {
+                Text(
+                    "跟随壁纸取色需要 Android 12 及以上",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        // 启动与操作习惯
+        SettingsSection("启动与操作") {
+            SettingLabel("启动时打开")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StartTab.entries.forEach { t ->
+                    FilterChip(
+                        selected = settings.startTab == t,
+                        onClick = {
+                            store.setStartTab(t)
+                            android.widget.Toast.makeText(context, "启动时打开：${t.label()}", android.widget.Toast.LENGTH_SHORT).show()
+                        },
+                        label = { Text(t.label()) }
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            SettingLabel("点日历某天时")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = settings.calendarTapAction == CalendarTapAction.OPEN_DAY_BOARD,
+                    onClick = { store.setCalendarTapAction(CalendarTapAction.OPEN_DAY_BOARD) },
+                    label = { Text("展开 24 小时") }
+                )
+                FilterChip(
+                    selected = settings.calendarTapAction == CalendarTapAction.QUICK_LOG_NOW,
+                    onClick = { store.setCalendarTapAction(CalendarTapAction.QUICK_LOG_NOW) },
+                    label = { Text("直接记录此刻") }
+                )
+            }
+        }
+
         // 提醒
         SettingsSection("提醒") {
             SwitchRow(
@@ -196,6 +259,13 @@ fun SettingsPage(
 
         // 日历
         SettingsSection("日历") {
+            SwitchRow(
+                title = "格子里显示备注",
+                subtitle = "有备注时在日历格子里显示一行摘要",
+                checked = settings.calendarShowNote,
+                onCheckedChange = { store.setCalendarShowNote(it) }
+            )
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
             SettingLabel("每周起始日")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
