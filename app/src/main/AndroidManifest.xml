@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <!-- 让闹钟在 Doze 模式下也能触发 -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 跳转到「忽略电池优化」设置页需要 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:allowBackup="false"

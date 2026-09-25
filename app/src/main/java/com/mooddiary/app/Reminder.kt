@@ -223,21 +223,43 @@ object Reminder {
         return pm.isIgnoringBatteryOptimizations(context.packageName)
     }
 
+    /**
+     * 跳转到系统的电池优化设置页。
+     * 逐级降级并给出提示，避免点了没反应：
+     * 1. 专属白名单授权页（需要 REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 权限）
+     * 2. 系统电池优化列表页
+     * 3. 应用详情页兜底
+     * 4. 都不行就提示用户手动设置
+     */
     fun openBatteryOptimizationSettings(context: Context) {
-        if (Build.VERSION.SDK_INT >= 23) {
-            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                data = Uri.parse("package:${context.packageName}")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            runCatching { context.startActivity(intent) }
-                .onFailure {
-                    runCatching {
-                        context.startActivity(
-                            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        )
-                    }
-                }
+        fun tryStart(intent: Intent): Boolean = try {
+            context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            true
+        } catch (e: Exception) {
+            false
         }
+
+        val opened = if (Build.VERSION.SDK_INT < 23) {
+            false
+        } else {
+            when {
+                tryStart(
+                    Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = Uri.parse("package:${context.packageName}")
+                    }
+                ) -> true
+                tryStart(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) -> true
+                tryStart(
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.parse("package:${context.packageName}")
+                    }
+                ) -> true
+                else -> false
+            }
+        }
+
+        val msg = if (opened) "已打开系统设置，请允许后台运行"
+        else "无法自动跳转，请手动在系统设置中找到本应用并允许后台运行"
+        android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
     }
 }
