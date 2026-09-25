@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- API 24/25 传统图标（圆角方形底 + 白色笑脸）；API 26+ 由 mipmap-anydpi-v26 的自适应图标覆盖 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFB300"
+        android:pathData="M6,1h12a5,5 0 0,1 5,5v12a5,5 0 0,1 -5,5h-12a5,5 0 0,1 -5,-5v-12a5,5 0 0,1 5,-5z" />
+    <group
+        android:pivotX="12"
+        android:pivotY="12"
+        android:scaleX="0.72"
+        android:scaleY="0.72">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M12,2a10,10 0 1,0 0,20a10,10 0 1,0 0,-20z M9,9.5a1.5,1.5 0 1,0 0,3a1.5,1.5 0 1,0 0,-3z M15,9.5a1.5,1.5 0 1,0 0,3a1.5,1.5 0 1,0 0,-3z M8.2,14.5h7.6a3.8,3.8 0 0,1 -7.6,0z" />
+    </group>
+</vector>

@@ -8,3 +8,12 @@ local.properties
 /tmp/
 android-sdk/
 gradle-home/
+
+# 签名凭据与私钥：绝不入库
+keystore.properties
+*.keystore
+*.jks
+
+# 构建产物 APK：仓库不再追踪（见 README「发布」）
+*.apk
+*.aab
