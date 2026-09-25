@@ -41,23 +41,32 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.room.*
+import androidx.room.withTransaction
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+
+/** 备注长度上限，防止超长文本整段进内存与数据库 */
+const val MAX_NOTE_LENGTH = 500
 
 @Entity(tableName = "mood_entries", indices = [Index(value = ["date", "hour"], unique = true)])
 data class MoodEntry(
@@ -69,143 +78,479 @@ data class MoodEntry(
     val updatedAt: Long = System.currentTimeMillis()
 )
 
-@Dao
-interface MoodDao {
-    @Query("SELECT * FROM mood_entries ORDER BY date DESC, hour DESC") fun observeAll(): kotlinx.coroutines.flow.Flow<List<MoodEntry>>
-    @Query("SELECT * FROM mood_entries WHERE date = :date AND hour = :hour LIMIT 1") suspend fun findByDateHour(date: String, hour: Int): MoodEntry?
-    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insert(entry: MoodEntry)
-    @Delete suspend fun delete(entry: MoodEntry)
+/**
+ * 保存结果。当目标 (日期, 小时) 已被另一条记录占用时返回 [Conflict]，
+ * 由 UI 明确询问用户是否覆盖——绝不静默删掉已有记录。
+ */
+sealed interface SaveOutcome {
+    data object Saved : SaveOutcome
+    data class Conflict(val existing: MoodEntry) : SaveOutcome
 }
 
-@Database(entities = [MoodEntry::class], version = 2, exportSchema = false)
+@Dao
+interface MoodDao {
+    @Query("SELECT * FROM mood_entries ORDER BY date DESC, hour DESC")
+    fun observeAll(): kotlinx.coroutines.flow.Flow<List<MoodEntry>>
+
+    @Query("SELECT * FROM mood_entries WHERE date = :date AND hour = :hour LIMIT 1")
+    suspend fun findByDateHour(date: String, hour: Int): MoodEntry?
+
+    /** ABORT：冲突时抛异常而不是替换，配合上层显式冲突处理，避免静默丢数据 */
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insert(entry: MoodEntry): Long
+
+    @Update
+    suspend fun update(entry: MoodEntry)
+
+    @Delete
+    suspend fun delete(entry: MoodEntry)
+}
+
+@Database(entities = [MoodEntry::class], version = 2, exportSchema = true)
 abstract class MoodDatabase : RoomDatabase() {
     abstract fun dao(): MoodDao
+
     companion object {
         @Volatile private var instance: MoodDatabase? = null
+
         fun get(context: android.content.Context): MoodDatabase = instance ?: synchronized(this) {
             Room.databaseBuilder(context.applicationContext, MoodDatabase::class.java, "mood_diary.db")
-                .fallbackToDestructiveMigration()
-                .build().also { instance = it }
+                // 仅对 v1 保留破坏性迁移：v1 的建表语句已无处可考，且历史版本正是这样处理的。
+                // v2 往后的任何版本升级都必须显式提供 Migration，绝不会再清空用户日记。
+                .fallbackToDestructiveMigrationFrom(1)
+                .build()
+                .also { instance = it }
         }
     }
 }
 
-class MoodViewModel(application: Application) : AndroidViewModel(application) {
-    private val dao = MoodDatabase.get(application).dao()
-    val entries: StateFlow<List<MoodEntry>> = dao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-    fun save(date: LocalDate, hour: Int, moodId: Int, note: String, old: MoodEntry?) = viewModelScope.launch {
-        dao.insert(MoodEntry(id = old?.id ?: 0, date = date.toString(), hour = hour, moodId = moodId, note = note.trim(), updatedAt = System.currentTimeMillis()))
+/**
+ * 心情记录的存储抽象。Room 实现见 [RoomMoodStore]；
+ * 测试实现位于 `src/test`，让数据层回归测试无需 Android 运行时即可运行。
+ */
+interface MoodStore {
+    fun observeAll(): kotlinx.coroutines.flow.Flow<List<MoodEntry>>
+    suspend fun findByDateHour(date: String, hour: Int): MoodEntry?
+    suspend fun insert(entry: MoodEntry)
+    suspend fun update(entry: MoodEntry)
+    suspend fun delete(entry: MoodEntry)
+    suspend fun <R> transaction(block: suspend () -> R): R
+}
+
+class RoomMoodStore(private val db: MoodDatabase) : MoodStore {
+    private val dao = db.dao()
+    override fun observeAll() = dao.observeAll()
+    override suspend fun findByDateHour(date: String, hour: Int) = dao.findByDateHour(date, hour)
+    override suspend fun insert(entry: MoodEntry) { dao.insert(entry) }
+    override suspend fun update(entry: MoodEntry) { dao.update(entry) }
+    override suspend fun delete(entry: MoodEntry) { dao.delete(entry) }
+    override suspend fun <R> transaction(block: suspend () -> R): R = db.withTransaction { block() }
+}
+
+/**
+ * 心情记录的数据入口。与 ViewModel 分离，便于用内存实现做回归测试。
+ *
+ * 关键约定：**任何路径都不得静默删除已有记录**。
+ * 旧的实现使用 `OnConflictStrategy.REPLACE` + 唯一索引，用户把一条记录的日期
+ * 改成另一条记录已占用的时段时，SQLite 会先删掉冲突行再插入，导致那条记录
+ * 连同备注被无声抹掉。现在改为显式冲突检测：由调用方决定是否覆盖。
+ */
+class MoodRepository(private val store: MoodStore) {
+
+    fun observeAll(): kotlinx.coroutines.flow.Flow<List<MoodEntry>> = store.observeAll()
+
+    suspend fun findByDateHour(date: LocalDate, hour: Int): MoodEntry? =
+        store.findByDateHour(date.toString(), hour)
+
+    private fun buildEntry(date: LocalDate, hour: Int, moodId: Int, note: String, old: MoodEntry?) =
+        MoodEntry(
+            id = old?.id ?: 0,
+            date = date.toString(),
+            hour = hour,
+            moodId = moodId,
+            note = note.trim().take(MAX_NOTE_LENGTH),
+            updatedAt = System.currentTimeMillis()
+        )
+
+    /**
+     * 在同一事务内先查冲突再写入。目标时段已被**另一条**记录占用时返回
+     * [SaveOutcome.Conflict]，交由 UI 询问用户，而不是直接覆盖。
+     * 编辑自身记录（id 相同）不算冲突。
+     */
+    suspend fun save(date: LocalDate, hour: Int, moodId: Int, note: String, old: MoodEntry?): SaveOutcome =
+        store.transaction {
+            val existing = store.findByDateHour(date.toString(), hour)
+            if (existing != null && existing.id != old?.id) {
+                return@transaction SaveOutcome.Conflict(existing)
+            }
+            val entry = buildEntry(date, hour, moodId, note, old)
+            if (old == null) store.insert(entry) else store.update(entry)
+            SaveOutcome.Saved
+        }
+
+    /** 仅在用户于冲突弹窗中确认「覆盖」后调用：先删被覆盖的记录，再写入新记录。 */
+    suspend fun overwrite(
+        date: LocalDate, hour: Int, moodId: Int, note: String, old: MoodEntry?, conflict: MoodEntry
+    ) = store.transaction {
+        store.delete(conflict)
+        val entry = buildEntry(date, hour, moodId, note, old)
+        if (old == null) store.insert(entry) else store.update(entry)
     }
-    fun delete(entry: MoodEntry) = viewModelScope.launch { dao.delete(entry) }
+
+    suspend fun delete(entry: MoodEntry) = store.delete(entry)
+}
+
+class MoodViewModel(application: Application) : AndroidViewModel(application) {
+    private val repo = MoodRepository(RoomMoodStore(MoodDatabase.get(application)))
+
+    val entries: StateFlow<List<MoodEntry>> = repo.observeAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    suspend fun save(date: LocalDate, hour: Int, moodId: Int, note: String, old: MoodEntry?): SaveOutcome =
+        repo.save(date, hour, moodId, note, old)
+
+    suspend fun overwrite(
+        date: LocalDate, hour: Int, moodId: Int, note: String, old: MoodEntry?, conflict: MoodEntry
+    ) = repo.overwrite(date, hour, moodId, note, old, conflict)
+
+    fun delete(entry: MoodEntry) = viewModelScope.launch { repo.delete(entry) }
 }
 
 data class Mood(val id: Int, val label: String, val emoji: String, val color: Color, val score: Int)
+
 val moods = listOf(
-    Mood(5, "开心", "😄", Color(0xFFFFB300), 5), Mood(4, "平静", "😌", Color(0xFF43A047), 4),
-    Mood(3, "一般", "😐", Color(0xFF78909C), 3), Mood(2, "低落", "😔", Color(0xFF42A5F5), 2),
+    Mood(5, "开心", "😄", Color(0xFFFFB300), 5),
+    Mood(4, "平静", "😌", Color(0xFF43A047), 4),
+    Mood(3, "一般", "😐", Color(0xFF78909C), 3),
+    Mood(2, "低落", "😔", Color(0xFF42A5F5), 2),
     Mood(1, "生气", "😡", Color(0xFFEF5350), 1)
 )
+
 fun moodOf(id: Int) = moods.firstOrNull { it.id == id } ?: moods[2]
 
 class MainActivity : ComponentActivity() {
     private val openHour = mutableStateOf<Int?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState); enableEdgeToEdge()
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         openHour.value = intent.getIntExtra(EXTRA_HOUR, -1).takeIf { it >= 0 }
         setContent { MoodDiaryTheme { MoodDiaryApp(openHour = openHour) } }
     }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         intent.getIntExtra(EXTRA_HOUR, -1).takeIf { it >= 0 }?.let { openHour.value = it }
     }
-    companion object { const val EXTRA_HOUR = "extra_hour" }
+
+    companion object {
+        const val EXTRA_HOUR = "extra_hour"
+    }
 }
 
-@Composable fun MoodDiaryTheme(content: @Composable () -> Unit) {
+@Composable
+fun MoodDiaryTheme(content: @Composable () -> Unit) {
     val dark = isSystemInDarkTheme()
-    MaterialTheme(colorScheme = if (dark) darkColorScheme(primary = Color(0xFFFFB300), secondary = Color(0xFFFFCC66)) else lightColorScheme(primary = Color(0xFFE48600), secondary = Color(0xFF9A6100), tertiary = Color(0xFF4F6F42)), content = content)
+    MaterialTheme(
+        colorScheme = if (dark) {
+            darkColorScheme(primary = Color(0xFFFFB300), secondary = Color(0xFFFFCC66))
+        } else {
+            lightColorScheme(
+                primary = Color(0xFFE48600),
+                secondary = Color(0xFF9A6100),
+                tertiary = Color(0xFF4F6F42)
+            )
+        },
+        content = content
+    )
 }
+
+/** 待用户确认的覆盖请求 */
+private data class PendingConflict(
+    val date: LocalDate,
+    val hour: Int,
+    val moodId: Int,
+    val note: String,
+    val old: MoodEntry?,
+    val conflict: MoodEntry
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable fun MoodDiaryApp(vm: MoodViewModel = androidx.lifecycle.viewmodel.compose.viewModel(), openHour: MutableState<Int?> = mutableStateOf(null)) {
+@Composable
+fun MoodDiaryApp(
+    vm: MoodViewModel = androidx.lifecycle.viewmodel.compose.viewModel(),
+    openHour: MutableState<Int?> = mutableStateOf(null)
+) {
     val entries by vm.entries.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var month by rememberSaveable { mutableStateOf(YearMonth.now()) }
     var hourSheetDate by remember { mutableStateOf<LocalDate?>(null) }
     var editTarget by remember { mutableStateOf<Triple<LocalDate, Int, MoodEntry?>?>(null) }
+    var pendingConflict by remember { mutableStateOf<PendingConflict?>(null) }
+    val scope = rememberCoroutineScope()
 
-    fun openEdit(date: LocalDate, hour: Int) { editTarget = Triple(date, hour, entries.firstOrNull { it.date == date.toString() && it.hour == hour }) }
+    fun openEdit(date: LocalDate, hour: Int) {
+        editTarget = Triple(date, hour, entries.firstOrNull { it.date == date.toString() && it.hour == hour })
+    }
 
     // 点击通知跳转：直接打开当前小时的记录弹窗
-    LaunchedEffect(openHour.value) { openHour.value?.let { h -> openEdit(LocalDate.now(), h); openHour.value = null } }
+    LaunchedEffect(openHour.value) {
+        openHour.value?.let { h -> openEdit(LocalDate.now(), h); openHour.value = null }
+    }
+
+    val navItems = listOf(
+        "日历" to Icons.Default.CalendarMonth,
+        "记录" to Icons.Default.List,
+        "统计" to Icons.Default.BarChart
+    )
 
     Scaffold(
-        topBar = { CenterAlignedTopAppBar(title = { Text("心情日记", fontWeight = FontWeight.Bold) }, actions = { ReminderToggle() }) },
-        bottomBar = { NavigationBar { listOf("日历" to Icons.Default.CalendarMonth, "记录" to Icons.Default.List, "统计" to Icons.Default.BarChart).forEachIndexed { i, item -> NavigationBarItem(selected = tab == i, onClick = { tab = i }, icon = { Icon(item.second, null) }, label = { Text(item.first) }) } } },
-        floatingActionButton = { if (tab != 2) FloatingActionButton(onClick = { openEdit(LocalDate.now(), java.time.LocalTime.now().hour) }) { Icon(Icons.Default.Add, "新增记录") } }
+        topBar = {
+            CenterAlignedTopAppBar(
+                title = { Text("心情日记", fontWeight = FontWeight.Bold) },
+                actions = { ReminderToggle() }
+            )
+        },
+        bottomBar = {
+            NavigationBar {
+                navItems.forEachIndexed { i, item ->
+                    NavigationBarItem(
+                        selected = tab == i,
+                        onClick = { tab = i },
+                        icon = { Icon(item.second, item.first) },
+                        label = { Text(item.first) }
+                    )
+                }
+            }
+        },
+        floatingActionButton = {
+            if (tab != 2) {
+                FloatingActionButton(onClick = { openEdit(LocalDate.now(), LocalTime.now().hour) }) {
+                    Icon(Icons.Default.Add, "新增记录")
+                }
+            }
+        }
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
-            when(tab) {
+            when (tab) {
                 0 -> CalendarPage(month, entries, { month = it }, { d -> hourSheetDate = d })
                 1 -> RecordsPage(entries) { e -> openEdit(LocalDate.parse(e.date), e.hour) }
                 else -> StatsPage(month, entries, { month = it })
             }
         }
     }
-    hourSheetDate?.let { d -> HourMoodSheet(d, entries.filter { it.date == d.toString() }, onPick = { h, _ -> openEdit(d, h) }, onClose = { hourSheetDate = null }) }
-    editTarget?.let { (d, h, entry) -> MoodDialog(d, h, entry, onDismiss = { editTarget = null }, onSave = { dt, hh, m, n -> vm.save(dt, hh, m, n, editTarget?.third); editTarget = null }, onDelete = { entry?.let(vm::delete); editTarget = null }) }
-}
 
-@Composable fun CalendarPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth)->Unit, open: (LocalDate)->Unit) {
-    val latestByDay = remember(entries) { entries.groupBy { it.date }.mapValues { (_, list) -> list.maxByOrNull { it.hour } } }
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-            TextButton(onClick = { setMonth(month.minusMonths(1)) }) { Text("‹ 上月") }
-            Text("${month.year}年${month.monthValue}月", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            TextButton(onClick = { setMonth(month.plusMonths(1)) }) { Text("下月 ›") }
-        }
-        TextButton(onClick = { setMonth(YearMonth.now()) }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("回到今天") }
-        Row(Modifier.fillMaxWidth()) { listOf("日","一","二","三","四","五","六").forEach { Text(it, Modifier.weight(1f), textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold) } }
-        val start = month.atDay(1); val paddingDays = start.dayOfWeek.value % 7; val total = paddingDays + month.lengthOfMonth(); val rows = (total + 6) / 7
-        repeat(rows) { row -> Row(Modifier.fillMaxWidth()) { repeat(7) { col ->
-            val day = row*7+col-paddingDays+1
-            Box(Modifier.weight(1f).aspectRatio(0.82f).padding(2.dp)) {
-                if (day in 1..month.lengthOfMonth()) { val d = month.atDay(day); CalendarCell(d, latestByDay[d.toString()], d == LocalDate.now(), { open(d) }) }
+    hourSheetDate?.let { d ->
+        HourMoodSheet(
+            d,
+            entries.filter { it.date == d.toString() },
+            onPick = { h, _ -> openEdit(d, h) },
+            onClose = { hourSheetDate = null }
+        )
+    }
+
+    editTarget?.let { (d, h, entry) ->
+        MoodDialog(
+            d, h, entry,
+            onDismiss = { editTarget = null },
+            onSave = { dt, hh, m, n ->
+                val old = editTarget?.third
+                editTarget = null
+                scope.launch {
+                    when (val r = vm.save(dt, hh, m, n, old)) {
+                        is SaveOutcome.Saved -> Unit
+                        is SaveOutcome.Conflict -> pendingConflict = PendingConflict(dt, hh, m, n, old, r.existing)
+                    }
+                }
+            },
+            onDelete = { entry?.let(vm::delete); editTarget = null }
+        )
+    }
+
+    pendingConflict?.let { p ->
+        ConflictDialog(
+            pending = p,
+            onCancel = { pendingConflict = null },
+            onOverwrite = {
+                pendingConflict = null
+                scope.launch { vm.overwrite(p.date, p.hour, p.moodId, p.note, p.old, p.conflict) }
             }
-        } } }
-        Spacer(Modifier.height(8.dp))
-        Text("点击某天 → 按小时记录心情", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text("颜色说明：" + moods.joinToString("  ") { "${it.emoji}${it.label}" }, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        )
     }
 }
 
-@Composable fun CalendarCell(date: LocalDate, entry: MoodEntry?, today: Boolean, click: ()->Unit) {
-    val mood = entry?.let { moodOf(it.moodId) }; val bg = mood?.color ?: MaterialTheme.colorScheme.surfaceVariant
-    val textColor = if (mood != null && bg.luminance() < .55f) Color.White else MaterialTheme.colorScheme.onSurface
-    Box(Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp)).background(bg).then(if(today) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(10.dp)) else Modifier).clickable(onClick = click), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) { Text(date.dayOfMonth.toString(), color = textColor, fontWeight = if(today) FontWeight.Bold else FontWeight.Normal); if(mood != null) Text(mood.emoji, fontSize = 15.sp) }
+/** 目标时段已被占用时的确认弹窗——用户明确选择后才覆盖 */
+@Composable
+private fun ConflictDialog(pending: PendingConflict, onCancel: () -> Unit, onOverwrite: () -> Unit) {
+    val m = moodOf(pending.conflict.moodId)
+    val slot = pending.date.format(DateTimeFormatter.ofPattern("yyyy年MM月dd日")) +
+        " " + String.format(Locale.CHINA, "%02d:00", pending.hour)
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("该时段已有记录") },
+        text = {
+            Column {
+                Text("$slot 已经记过一条心情：")
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "${m.emoji} ${m.label}" +
+                        if (pending.conflict.note.isBlank()) "" else " · ${pending.conflict.note}",
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "继续保存会删除上面这条原有记录。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onOverwrite) { Text("覆盖") } },
+        dismissButton = { TextButton(onClick = onCancel) { Text("取消") } }
+    )
+}
+
+@Composable
+fun CalendarPage(
+    month: YearMonth,
+    entries: List<MoodEntry>,
+    setMonth: (YearMonth) -> Unit,
+    open: (LocalDate) -> Unit
+) {
+    val latestByDay = remember(entries) {
+        entries.groupBy { it.date }.mapValues { (_, list) -> list.maxByOrNull { it.hour } }
+    }
+    Column(Modifier.fillMaxSize().padding(16.dp)) {
+        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+            TextButton(onClick = { setMonth(month.minusMonths(1)) }) { Text("‹ 上月") }
+            Text(
+                "${month.year}年${month.monthValue}月",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+            TextButton(onClick = { setMonth(month.plusMonths(1)) }) { Text("下月 ›") }
+        }
+        TextButton(
+            onClick = { setMonth(YearMonth.now()) },
+            modifier = Modifier.align(Alignment.CenterHorizontally)
+        ) { Text("回到今天") }
+
+        Row(Modifier.fillMaxWidth()) {
+            listOf("日", "一", "二", "三", "四", "五", "六").forEach {
+                Text(
+                    it, Modifier.weight(1f),
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
+        val start = month.atDay(1)
+        val paddingDays = start.dayOfWeek.value % 7
+        val total = paddingDays + month.lengthOfMonth()
+        val rows = (total + 6) / 7
+        repeat(rows) { row ->
+            Row(Modifier.fillMaxWidth()) {
+                repeat(7) { col ->
+                    val day = row * 7 + col - paddingDays + 1
+                    Box(Modifier.weight(1f).aspectRatio(0.82f).padding(2.dp)) {
+                        if (day in 1..month.lengthOfMonth()) {
+                            val d = month.atDay(day)
+                            CalendarCell(d, latestByDay[d.toString()], d == LocalDate.now()) { open(d) }
+                        }
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text("点击某天 → 按小时记录心情", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            "颜色说明：" + moods.joinToString("  ") { "${it.emoji}${it.label}" },
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+fun CalendarCell(date: LocalDate, entry: MoodEntry?, today: Boolean, click: () -> Unit) {
+    val mood = entry?.let { moodOf(it.moodId) }
+    val bg = mood?.color ?: MaterialTheme.colorScheme.surfaceVariant
+    val textColor =
+        if (mood != null && bg.luminance() < .55f) Color.White else MaterialTheme.colorScheme.onSurface
+    Box(
+        Modifier.fillMaxSize()
+            .clip(RoundedCornerShape(10.dp))
+            .background(bg)
+            .then(
+                if (today) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(10.dp))
+                else Modifier
+            )
+            .clickable(onClick = click),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                date.dayOfMonth.toString(),
+                color = textColor,
+                fontWeight = if (today) FontWeight.Bold else FontWeight.Normal
+            )
+            if (mood != null) Text(mood.emoji, fontSize = 15.sp)
+        }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable fun HourMoodSheet(date: LocalDate, dayEntries: List<MoodEntry>, onPick: (Int, MoodEntry?) -> Unit, onClose: () -> Unit) {
+@Composable
+fun HourMoodSheet(
+    date: LocalDate,
+    dayEntries: List<MoodEntry>,
+    onPick: (Int, MoodEntry?) -> Unit,
+    onClose: () -> Unit
+) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onClose, sheetState = sheetState) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp)) {
-            Text("${date.format(DateTimeFormatter.ofPattern("yyyy年MM月dd日"))} 的心情", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text("点一个小时，记录那个时刻的心情", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                "${date.format(DateTimeFormatter.ofPattern("yyyy年MM月dd日"))} 的心情",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                "点一个小时，记录那个时刻的心情",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             Spacer(Modifier.height(12.dp))
-            LazyVerticalGrid(columns = GridCells.Fixed(4), verticalArrangement = Arrangement.spacedBy(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.height(440.dp)) {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(4),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.height(440.dp)
+            ) {
                 items((0..23).toList()) { h ->
                     val e = dayEntries.firstOrNull { it.hour == h }
                     val m = e?.let { moodOf(it.moodId) }
+                    val onColor =
+                        if (m != null && m.color.luminance() < .55f) Color.White
+                        else MaterialTheme.colorScheme.onSurface
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(m?.color ?: MaterialTheme.colorScheme.surfaceVariant).clickable { onPick(h, e) }.padding(vertical = 10.dp).fillMaxWidth()
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(m?.color ?: MaterialTheme.colorScheme.surfaceVariant)
+                            .clickable { onPick(h, e) }
+                            .padding(vertical = 10.dp)
+                            .fillMaxWidth()
                     ) {
-                        Text(String.format(Locale.CHINA, "%02d:00", h), fontSize = 11.sp, color = if (m != null && m.color.luminance() < .55f) Color.White else MaterialTheme.colorScheme.onSurface)
+                        Text(String.format(Locale.CHINA, "%02d:00", h), fontSize = 11.sp, color = onColor)
                         Text(if (m != null) m.emoji else "＋", fontSize = 20.sp)
-                        Text(if (m != null) m.label else "未记录", fontSize = 10.sp, color = if (m != null && m.color.luminance() < .55f) Color.White else MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            if (m != null) m.label else "未记录",
+                            fontSize = 10.sp,
+                            color = if (m != null) onColor else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }
@@ -213,69 +558,290 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable fun RecordsPage(entries: List<MoodEntry>, open: (MoodEntry)->Unit) {
-    if(entries.isEmpty()) EmptyState("还没有记录", "点击右下角 +，或从日历选一天按小时记录") else LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { items(entries, key={it.id}) { e -> val m = moodOf(e.moodId); Card(Modifier.fillMaxWidth().clickable { open(e) }) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Text(m.emoji, fontSize=30.sp); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text("${e.date.substring(5)} ${String.format(Locale.CHINA,"%02d:00",e.hour)}", fontWeight=FontWeight.Bold); Text(if(e.note.isBlank()) m.label else e.note, maxLines=2, overflow=TextOverflow.Ellipsis, color=MaterialTheme.colorScheme.onSurfaceVariant) }; Icon(Icons.Default.Edit, "编辑", tint=m.color) } } } }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth:(YearMonth)->Unit) {
-    val inMonth = entries.filter { runCatching { YearMonth.from(LocalDate.parse(it.date)) }.getOrNull() == month }
-    val latestByDay = inMonth.groupBy { it.date }.mapValues { (_, list) -> list.maxByOrNull { it.hour }!! }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) { TextButton(onClick={setMonth(month.minusMonths(1))}){Text("‹")}; Text("${month.year}年${month.monthValue}月统计", style=MaterialTheme.typography.titleLarge, fontWeight=FontWeight.Bold); TextButton(onClick={setMonth(month.plusMonths(1))}){Text("›")} }
-        TextButton(onClick={setMonth(YearMonth.now())}, Modifier.align(Alignment.CenterHorizontally)){Text("本月")}
-        if(inMonth.isEmpty()) { EmptyState("本月还没有心情记录", "按小时记下心情后，这里会展示你的情绪分布") } else {
-            val days = latestByDay.values
-            val avg = days.map { moodOf(it.moodId).score }.average()
-            Row(Modifier.fillMaxWidth(), horizontalArrangement=Arrangement.spacedBy(12.dp)) {
-                StatCard("记录天数", "${days.size} 天", Modifier.weight(1f)); StatCard("平均心情", String.format(Locale.CHINA,"%.1f / 5",avg), Modifier.weight(1f))
+@Composable
+fun RecordsPage(entries: List<MoodEntry>, open: (MoodEntry) -> Unit) {
+    if (entries.isEmpty()) {
+        EmptyState("还没有记录", "点击右下角 +，或从日历选一天按小时记录")
+        return
+    }
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        items(entries, key = { it.id }) { e ->
+            val m = moodOf(e.moodId)
+            Card(Modifier.fillMaxWidth().clickable { open(e) }) {
+                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(m.emoji, fontSize = 30.sp)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "${e.date.substring(5)} ${String.format(Locale.CHINA, "%02d:00", e.hour)}",
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            if (e.note.isBlank()) m.label else e.note,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(Icons.Default.Edit, "编辑这条记录", tint = m.color)
+                }
             }
-            Spacer(Modifier.height(18.dp))
-            Card(Modifier.fillMaxWidth()) { Text("本月共记录 ${inMonth.size} 条心情时段", Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium) }
-            Spacer(Modifier.height(22.dp)); Text("情绪分布（按天）", style=MaterialTheme.typography.titleMedium, fontWeight=FontWeight.Bold)
-            moods.forEach { m -> val count=days.count{it.moodId==m.id}; val pct=count.toFloat()/days.size; Row(Modifier.fillMaxWidth().padding(top=12.dp), verticalAlignment=Alignment.CenterVertically) { Text("${m.emoji} ${m.label}", Modifier.width(88.dp)); LinearProgressIndicator(pct, Modifier.weight(1f).height(10.dp).clip(CircleShape), color=m.color, trackColor=MaterialTheme.colorScheme.surfaceVariant); Text("  $count (${(pct*100).toInt()}%)", Modifier.width(74.dp), fontSize=12.sp) } }
-            Spacer(Modifier.height(24.dp)); Text("本月心情热力条", style=MaterialTheme.typography.titleMedium, fontWeight=FontWeight.Bold)
-            val map=latestByDay; FlowRow(Modifier.padding(top=10.dp), horizontalArrangement=Arrangement.spacedBy(5.dp), verticalArrangement=Arrangement.spacedBy(5.dp)) { (1..month.lengthOfMonth()).forEach { day -> val e=map[month.atDay(day).toString()]; Box(Modifier.size(18.dp).clip(CircleShape).background(e?.let{moodOf(it.moodId).color} ?: MaterialTheme.colorScheme.surfaceVariant), contentAlignment=Alignment.Center){ Text(day.toString(), fontSize=7.sp, color=if(e==null) MaterialTheme.colorScheme.onSurfaceVariant else Color.White) } } }
         }
     }
 }
 
-@Composable fun StatCard(label:String, value:String, modifier:Modifier=Modifier) { Card(modifier) { Column(Modifier.padding(16.dp)) { Text(label, color=MaterialTheme.colorScheme.onSurfaceVariant); Text(value, style=MaterialTheme.typography.titleLarge, fontWeight=FontWeight.Bold) } } }
-@Composable fun EmptyState(title:String, subtitle:String) { Column(Modifier.fillMaxWidth().padding(top=70.dp), horizontalAlignment=Alignment.CenterHorizontally) { Text("✦", fontSize=48.sp); Spacer(Modifier.height(10.dp)); Text(title, style=MaterialTheme.typography.titleMedium, fontWeight=FontWeight.Bold); Text(subtitle, Modifier.padding(16.dp), textAlign=TextAlign.Center, color=MaterialTheme.colorScheme.onSurfaceVariant) } }
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) -> Unit) {
+    val inMonth = entries.filter {
+        runCatching { YearMonth.from(LocalDate.parse(it.date)) }.getOrNull() == month
+    }
+    val latestByDay = inMonth.groupBy { it.date }.mapValues { (_, list) -> list.maxByOrNull { it.hour }!! }
 
-@Composable fun MoodDialog(date: LocalDate, hour: Int, entry: MoodEntry?, onDismiss:()->Unit, onSave:(LocalDate,Int,Int,String)->Unit, onDelete:()->Unit) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    var d by remember(entry, date){mutableStateOf(date)}; var selected by remember(entry){mutableIntStateOf(entry?.moodId ?: 5)}; var note by remember(entry){mutableStateOf(entry?.note ?: "")}
-    AlertDialog(onDismissRequest=onDismiss,
-        title={Text(if(entry==null) "记录心情" else "编辑心情")},
-        text={ Column {
-            OutlinedButton(onClick={ val c=d; DatePickerDialog(context, {_,y,m,day->d=LocalDate.of(y,m+1,day)},c.year,c.monthValue-1,c.dayOfMonth).show() }, modifier=Modifier.fillMaxWidth()){Text("日期：${d.format(DateTimeFormatter.ofPattern("yyyy年MM月dd日"))}")}
-            Spacer(Modifier.height(8.dp))
-            Text("时间：${String.format(Locale.CHINA,"%02d:00-%02d:59",hour,hour)}", style=MaterialTheme.typography.bodyMedium, color=MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(10.dp)); Text("心情是？")
-            Row(Modifier.fillMaxWidth(), horizontalArrangement=Arrangement.SpaceEvenly){ moods.forEach { m -> Column(horizontalAlignment=Alignment.CenterHorizontally, modifier=Modifier.clip(RoundedCornerShape(10.dp)).then(if(selected==m.id) Modifier.background(m.color.copy(alpha=.25f)) else Modifier).clickable{selected=m.id}.padding(5.dp)){Text(m.emoji,fontSize=25.sp); Text(m.label,fontSize=10.sp)} } }
-            Spacer(Modifier.height(10.dp)); OutlinedTextField(note,{note=it}, Modifier.fillMaxWidth(), label={Text("写点备注（可选）")}, minLines=3)
-        } },
-        confirmButton={TextButton(onClick={onSave(d,hour,selected,note)}){Text("保存")}},
-        dismissButton={Row { if(entry!=null) TextButton(onClick=onDelete){Icon(Icons.Default.Delete,null); Text("删除")}; TextButton(onClick=onDismiss){Text("取消")} }})
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+            TextButton(onClick = { setMonth(month.minusMonths(1)) }) { Text("‹") }
+            Text(
+                "${month.year}年${month.monthValue}月统计",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+            TextButton(onClick = { setMonth(month.plusMonths(1)) }) { Text("›") }
+        }
+        TextButton(
+            onClick = { setMonth(YearMonth.now()) },
+            modifier = Modifier.align(Alignment.CenterHorizontally)
+        ) { Text("本月") }
+
+        if (inMonth.isEmpty()) {
+            EmptyState("本月还没有心情记录", "按小时记下心情后，这里会展示你的情绪分布")
+            return@Column
+        }
+
+        val days = latestByDay.values
+        val avg = days.map { moodOf(it.moodId).score }.average()
+
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            StatCard("记录天数", "${days.size} 天", Modifier.weight(1f))
+            StatCard("平均心情", String.format(Locale.CHINA, "%.1f / 5", avg), Modifier.weight(1f))
+        }
+        Spacer(Modifier.height(18.dp))
+        Card(Modifier.fillMaxWidth()) {
+            Text(
+                "本月共记录 ${inMonth.size} 条心情时段",
+                Modifier.padding(12.dp),
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+
+        Spacer(Modifier.height(22.dp))
+        Text("情绪分布（按天）", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        moods.forEach { m ->
+            val count = days.count { it.moodId == m.id }
+            val pct = count.toFloat() / days.size
+            Row(
+                Modifier.fillMaxWidth().padding(top = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("${m.emoji} ${m.label}", Modifier.width(88.dp))
+                LinearProgressIndicator(
+                    pct,
+                    Modifier.weight(1f).height(10.dp).clip(CircleShape),
+                    color = m.color,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+                Text("  $count (${(pct * 100).toInt()}%)", Modifier.width(74.dp), fontSize = 12.sp)
+            }
+        }
+
+        Spacer(Modifier.height(24.dp))
+        Text("本月心情热力条", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        val map = latestByDay
+        FlowRow(
+            Modifier.padding(top = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            (1..month.lengthOfMonth()).forEach { day ->
+                val e = map[month.atDay(day).toString()]
+                Box(
+                    Modifier.size(18.dp).clip(CircleShape)
+                        .background(
+                            e?.let { moodOf(it.moodId).color } ?: MaterialTheme.colorScheme.surfaceVariant
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        day.toString(),
+                        fontSize = 7.sp,
+                        color = if (e == null) MaterialTheme.colorScheme.onSurfaceVariant else Color.White
+                    )
+                }
+            }
+        }
+    }
 }
 
-@Composable fun ReminderToggle() {
-    val context = androidx.compose.ui.platform.LocalContext.current
+@Composable
+fun StatCard(label: String, value: String, modifier: Modifier = Modifier) {
+    Card(modifier) {
+        Column(Modifier.padding(16.dp)) {
+            Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+fun EmptyState(title: String, subtitle: String) {
+    Column(
+        Modifier.fillMaxWidth().padding(top = 70.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text("✦", fontSize = 48.sp)
+        Spacer(Modifier.height(10.dp))
+        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Text(
+            subtitle, Modifier.padding(16.dp),
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+fun MoodDialog(
+    date: LocalDate,
+    hour: Int,
+    entry: MoodEntry?,
+    onDismiss: () -> Unit,
+    onSave: (LocalDate, Int, Int, String) -> Unit,
+    onDelete: () -> Unit
+) {
+    val context = LocalContext.current
+    var d by remember(entry, date) { mutableStateOf(date) }
+    var selected by remember(entry) { mutableIntStateOf(entry?.moodId ?: 5) }
+    var note by remember(entry) { mutableStateOf(entry?.note ?: "") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (entry == null) "记录心情" else "编辑心情") },
+        text = {
+            Column {
+                OutlinedButton(
+                    onClick = {
+                        val c = d
+                        DatePickerDialog(
+                            context,
+                            { _, y, m, day -> d = LocalDate.of(y, m + 1, day) },
+                            c.year, c.monthValue - 1, c.dayOfMonth
+                        ).show()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("日期：${d.format(DateTimeFormatter.ofPattern("yyyy年MM月dd日"))}") }
+
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "时间：${String.format(Locale.CHINA, "%02d:00-%02d:59", hour, hour)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(Modifier.height(10.dp))
+                Text("心情是？")
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    moods.forEach { m ->
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .then(
+                                    if (selected == m.id) Modifier.background(m.color.copy(alpha = .25f))
+                                    else Modifier
+                                )
+                                .clickable { selected = m.id }
+                                .padding(5.dp)
+                        ) {
+                            Text(m.emoji, fontSize = 25.sp)
+                            Text(m.label, fontSize = 10.sp)
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it.take(MAX_NOTE_LENGTH) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("写点备注（可选）") },
+                    supportingText = { Text("${note.length} / $MAX_NOTE_LENGTH") },
+                    minLines = 3
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(d, hour, selected, note) }) { Text("保存") } },
+        dismissButton = {
+            Row {
+                if (entry != null) {
+                    TextButton(onClick = onDelete) {
+                        Icon(Icons.Default.Delete, null)
+                        Text("删除")
+                    }
+                }
+                TextButton(onClick = onDismiss) { Text("取消") }
+            }
+        }
+    )
+}
+
+@Composable
+fun ReminderToggle() {
+    val context = LocalContext.current
     var enabled by remember { mutableStateOf(Reminder.isEnabled(context)) }
-    fun enable() { Reminder.setEnabled(context, true); enabled = true; toast(context, "已开启每小时心情提醒") }
-    val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) enable() else toast(context, "需要通知权限才能提醒你记录心情")
+
+    // 从系统设置返回时重新读取，避免开关状态与实际权限不一致
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) enabled = Reminder.isEnabled(context)
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
+
+    fun enable() {
+        Reminder.setEnabled(context, true)
+        enabled = true
+        toast(context, "已开启每小时心情提醒")
+    }
+
+    val permLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) enable() else toast(context, "需要通知权限才能提醒你记录心情")
+        }
+
     IconButton(onClick = {
-        if (enabled) { Reminder.setEnabled(context, false); enabled = false; toast(context, "已关闭每小时心情提醒") }
-        else if (Reminder.hasNotificationPermission(context)) enable()
-        else permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        when {
+            enabled -> {
+                Reminder.setEnabled(context, false)
+                enabled = false
+                toast(context, "已关闭每小时心情提醒")
+            }
+            Reminder.hasNotificationPermission(context) -> enable()
+            else -> permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }) {
-        Icon(if (enabled) Icons.Default.Notifications else Icons.Default.NotificationsOff,
+        Icon(
+            if (enabled) Icons.Default.Notifications else Icons.Default.NotificationsOff,
             if (enabled) "关闭每小时提醒" else "开启每小时提醒",
-            tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+            tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
-private fun toast(context: android.content.Context, msg: String) = android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+private fun toast(context: android.content.Context, msg: String) =
+    android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
