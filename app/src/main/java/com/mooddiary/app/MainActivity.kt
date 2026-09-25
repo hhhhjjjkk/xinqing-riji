@@ -241,7 +241,7 @@ class MainActivity : ComponentActivity() {
         val store = SettingsStore(this)
         store.syncReminder()
         setContent {
-            val settings by store.settings.collectAsStateWithLifecycle()
+            val settings by store.settings.collectAsStateWithLifecycle(initialValue = store.current())
             MoodDiaryTheme(themeMode = settings.themeMode) {
                 MoodDiaryApp(openHour = openHour, settingsStore = store)
             }
@@ -294,7 +294,7 @@ fun MoodDiaryApp(
 ) {
     val context = LocalContext.current
     val store = settingsStore ?: remember { SettingsStore(context) }
-    val settings by store.settings.collectAsStateWithLifecycle()
+    val settings by store.settings.collectAsStateWithLifecycle(initialValue = store.current())
     val entries by vm.entries.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var month by rememberSaveable { mutableStateOf(YearMonth.now()) }
@@ -844,7 +844,7 @@ fun MoodDialog(
 fun ReminderToggle(store: SettingsStore) {
     val context = LocalContext.current
     // 状态由设置统一管理，避免顶栏开关与设置页出现两份真值不同步
-    val reminderEnabled by produceState(initialValue = store.settings.value.reminderEnabled, store) {
+    val reminderEnabled by produceState(initialValue = store.current().reminderEnabled, store) {
         store.settings.collect { value = it.reminderEnabled }
     }
 

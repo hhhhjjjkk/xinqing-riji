@@ -128,7 +128,7 @@ object Reminder {
 
         val hour = LocalTime.now().hour
 
-        if (QuietHours.isQuiet(SettingsStore(context).settings.value, hour)) {
+        if (QuietHours.isQuiet(SettingsStore(context).current(), hour)) {
             schedule(context)
             return
         }
@@ -144,7 +144,7 @@ object Reminder {
         schedule(context)
     }
 
-    private fun sendNotification(context: Context, hour: Int) {
+    fun sendNotification(context: Context, hour: Int) {
         ensureChannel(context)
 
         // 点通知整体仍可跳转 app（打开记录弹窗），但不是必须的

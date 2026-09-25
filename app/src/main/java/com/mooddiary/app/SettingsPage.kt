@@ -34,7 +34,7 @@ fun SettingsPage(
 ) {
     val context = LocalContext.current
     // 直接从 store collect，确保任何修改立刻反映到 UI
-    val settings by store.settings.collectAsStateWithLifecycle()
+    val settings by store.settings.collectAsStateWithLifecycle(initialValue = AppSettings())
 
     // 进入页面时刷新一次：用户从系统设置返回后状态会变
     var ignoringBattery by remember { mutableStateOf(Reminder.isIgnoringBatteryOptimizations(context)) }
@@ -65,7 +65,7 @@ fun SettingsPage(
                 ThemeMode.entries.forEach { mode ->
                     FilterChip(
                         selected = settings.themeMode == mode,
-                        onClick = { store.setThemeMode(mode) },
+                        onClick = { store.setThemeMode(mode); android.widget.Toast.makeText(context, "已切换主题", android.widget.Toast.LENGTH_SHORT).show() },
                         label = {
                             Text(
                                 when (mode) {
@@ -148,6 +148,22 @@ fun SettingsPage(
             }
         }
 
+        // 测试通知：立即弹出一条带表情的通知，方便验证设置是否生效
+        SettingsSection("测试") {
+            Text(
+                "立即弹出一条测试通知，上面有 5 个表情可以直接点。\n点完会自动记录当前小时的心情，通知随即消失。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(10.dp))
+            OutlinedButton(onClick = {
+                android.widget.Toast.makeText(context, "已发送测试通知", android.widget.Toast.LENGTH_SHORT).show()
+                Reminder.sendNotification(context, java.time.LocalTime.now().hour)
+            }) {
+                Text("立即弹出测试通知")
+            }
+        }
+
         // 记录
         SettingsSection("记录") {
             SettingLabel("默认心情")
@@ -168,7 +184,7 @@ fun SettingsPage(
                                     Modifier.background(m.color.copy(alpha = .25f))
                                 else Modifier
                             )
-                            .clickable { store.setDefaultMood(m.id) }
+                            .clickable { store.setDefaultMood(m.id); android.widget.Toast.makeText(context, "默认心情：${m.label}", android.widget.Toast.LENGTH_SHORT).show() }
                             .padding(5.dp)
                     ) {
                         Text(m.emoji, fontSize = 25.sp)
@@ -184,12 +200,12 @@ fun SettingsPage(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
                     selected = settings.weekStart == WeekStart.SUNDAY,
-                    onClick = { store.setWeekStart(WeekStart.SUNDAY) },
+                    onClick = { store.setWeekStart(WeekStart.SUNDAY); android.widget.Toast.makeText(context, "已设为周日起始", android.widget.Toast.LENGTH_SHORT).show() },
                     label = { Text("周日") }
                 )
                 FilterChip(
                     selected = settings.weekStart == WeekStart.MONDAY,
-                    onClick = { store.setWeekStart(WeekStart.MONDAY) },
+                    onClick = { store.setWeekStart(WeekStart.MONDAY); android.widget.Toast.makeText(context, "已设为周一起始", android.widget.Toast.LENGTH_SHORT).show() },
                     label = { Text("周一") }
                 )
             }
