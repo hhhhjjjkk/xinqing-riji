@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自适应图标的背景层：整层铺满的白色。
+  必须铺满整个 108dp 画布（而不是只画中心 72dp），因为系统会把画布
+  放大后再裁切，只画中间会让可见区四角露出壁纸。
+
+  用矢量而非位图：纯色无需多套密度，体积更小且任何缩放都清晰。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M0,0h108v108h-108z" />
+</vector>
