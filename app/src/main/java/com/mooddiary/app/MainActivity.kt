@@ -94,6 +94,10 @@ interface MoodDao {
     @Query("SELECT * FROM mood_entries WHERE date = :date AND hour = :hour LIMIT 1")
     suspend fun findByDateHour(date: String, hour: Int): MoodEntry?
 
+    /** 同步版本：供 BroadcastReceiver 在 IO 线程调用（suspend 不便在 goAsync 里用） */
+    @Query("SELECT id FROM mood_entries WHERE date = :date AND hour = :hour LIMIT 1")
+    fun findByDateHourSync(date: String, hour: Int): Long?
+
     /** ABORT：冲突时抛异常而不是替换，配合上层显式冲突处理，避免静默丢数据 */
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(entry: MoodEntry): Long

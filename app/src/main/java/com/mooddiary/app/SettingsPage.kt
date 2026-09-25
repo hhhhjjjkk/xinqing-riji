@@ -13,6 +13,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material3.*
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,6 +32,20 @@ fun SettingsPage(
     recordCount: Int,
     onClearAll: () -> Unit
 ) {
+    val context = LocalContext.current
+    // 进入页面时刷新一次：用户从系统设置返回后状态会变
+    var ignoringBattery by remember { mutableStateOf(Reminder.isIgnoringBatteryOptimizations(context)) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                ignoringBattery = Reminder.isIgnoringBatteryOptimizations(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     var clearConfirm by remember { mutableStateOf(false) }
     var hourPicker by remember { mutableStateOf<Pair<String, Int>?>(null) }
 
@@ -94,6 +112,36 @@ fun SettingsPage(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+        }
+
+        // 提醒可靠性：国产 ROM 上不处理电池优化，提醒基本不会来
+        if (settings.reminderEnabled) {
+            SettingsSection("提醒可靠性") {
+                Text(
+                    "已使用精确闹钟，理论上关掉 app、重启手机后仍会提醒。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (!ignoringBattery) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "但系统可能为了省电推迟或拦截提醒。建议把本应用加入电池优化白名单。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(onClick = { Reminder.openBatteryOptimizationSettings(context) }) {
+                        Text("去设置电池优化")
+                    }
+                } else {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "已加入电池优化白名单 ✓",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
             }
         }
 
