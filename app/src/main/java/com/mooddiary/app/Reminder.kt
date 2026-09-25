@@ -12,8 +12,13 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.room.withTransaction
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.LocalTime
 import java.util.Calendar
@@ -22,11 +27,7 @@ import java.util.Locale
 /**
  * 每小时心情提醒的调度与发送。
  *
- * 调度为什么用 AlarmManager 而不是 WorkManager 周期任务：
- * WorkManager 的周期任务在系统 Doze 模式下会被推迟，国产 ROM 的电池优化
- * 更是直接不执行，实测表现为「只有 app 在后台才提醒」。
- * 这里改用 setExactAndAllowWhileIdle 精确闹钟 + setRepeating 兜底，
- * 配合开机广播恢复调度，并引导用户把本应用加入电池优化白名单。
+ * 通知直接内嵌 5 个表情按钮，点一下就记录当前小时心情，不跳转 app。
  */
 object Reminder {
 
@@ -35,8 +36,17 @@ object Reminder {
     private const val KEY_ENABLED = "hourly_reminder"
     private const val REQ_ALARM = 9001
 
-    /** 触发时把当前小时通过广播带出来，接收端再决定是否通知 */
+    /** 整点触发广播 */
     const val ACTION_TICK = "com.mooddiary.app.ACTION_REMINDER_TICK"
+    /** 在通知里点表情的快速记录广播 */
+    const val ACTION_QUICK_MOOD = "com.mooddiary.app.ACTION_QUICK_MOOD"
+    const val EXTRA_MOOD_ID = "extra_mood_id"
+    const val EXTRA_HOUR = "extra_hour"
+
+    /** 心情列表，供通知 RemoteViews 使用（和 moods 保持一致） */
+    private val NOTIFICATION_MOODS = listOf(
+        5 to "😄", 4 to "😌", 3 to "😐", 2 to "😔", 1 to "😡"
+    )
 
     fun isEnabled(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_ENABLED, false)
@@ -52,7 +62,6 @@ object Reminder {
         }
     }
 
-    /** 开机 / 包更新后由广播调用，恢复已开启的提醒 */
     fun rescheduleIfEnabled(context: Context) {
         if (isEnabled(context)) {
             ensureChannel(context)
@@ -64,9 +73,7 @@ object Reminder {
         if (Build.VERSION.SDK_INT >= 26) {
             val channel = NotificationChannel(
                 CHANNEL_ID, "每小时心情提醒", NotificationManager.IMPORTANCE_DEFAULT
-            ).apply {
-                description = "每小时提醒你记录当下的心情"
-            }
+            ).apply { description = "每小时提醒你记录当下的心情" }
             context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
@@ -80,15 +87,11 @@ object Reminder {
     // ---------- 调度 ----------
 
     private fun alarmIntent(context: Context): PendingIntent {
-        val intent = Intent(context, ReminderReceiver::class.java).apply {
-            action = ACTION_TICK
-        }
-        // FLAG_IMMUTABLE 必须加，Android 12+ 强制要求
+        val intent = Intent(context, ReminderReceiver::class.java).apply { action = ACTION_TICK }
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         return PendingIntent.getBroadcast(context, REQ_ALARM, intent, flags)
     }
 
-    /** 下一个整点的时间戳 */
     fun nextHourMillis(now: Calendar = Calendar.getInstance()): Long {
         val cal = now.clone() as Calendar
         cal.add(Calendar.HOUR_OF_DAY, 1)
@@ -103,20 +106,12 @@ object Reminder {
         val pi = alarmIntent(context)
         val triggerAt = nextHourMillis()
 
-        // Android 12+ 需要先获得精确闹钟权限，否则会抛 SecurityException
         if (Build.VERSION.SDK_INT >= 31 && !am.canScheduleExactAlarms()) {
-            am.cancel(pi) // 没有权限就退回普通重复闹钟
-            am.setRepeating(
-                AlarmManager.RTC_WAKEUP, triggerAt, AlarmManager.INTERVAL_HOUR, pi
-            )
+            am.cancel(pi)
+            am.setRepeating(AlarmManager.RTC_WAKEUP, triggerAt, AlarmManager.INTERVAL_HOUR, pi)
             return
         }
-
-        // 精确闹钟：Doze 下也能在整点触发（allowWhileIdle）
         am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
-        // 同时挂一个重复闹钟兜底：万一单次闹钟因进程被杀而丢失，
-        // 系统会按小时再次唤起。两者触发到同一 PendingIntent，不会重复通知
-        // （接收端按小时去重）。
         am.setRepeating(AlarmManager.RTC_WAKEUP, triggerAt, AlarmManager.INTERVAL_HOUR, pi)
     }
 
@@ -125,69 +120,109 @@ object Reminder {
         am.cancel(alarmIntent(context))
     }
 
-    // ---------- 发送通知 ----------
+    // ---------- 通知 ----------
 
-    /** 由广播调用：判断免打扰/已记录后决定是否通知，并续排下一次 */
     fun onTick(context: Context) {
         if (!isEnabled(context)) return
         if (!hasNotificationPermission(context)) return
 
         val hour = LocalTime.now().hour
 
-        // 免打扰时段内不提醒（跨天时段如 22→8 也能正确处理）
         if (QuietHours.isQuiet(SettingsStore(context).settings.value, hour)) {
             schedule(context)
             return
         }
 
-        // 本小时已记录过心情则不打扰
         runCatching {
             MoodDatabase.get(context).dao()
                 .findByDateHourSync(LocalDate.now().toString(), hour) != null
         }.getOrDefault(false).let { recorded ->
-            if (recorded) {
-                schedule(context)
-                return
-            }
+            if (recorded) { schedule(context); return }
         }
 
         sendNotification(context, hour)
-        schedule(context) // 续排下一个整点
+        schedule(context)
     }
 
     private fun sendNotification(context: Context, hour: Int) {
         ensureChannel(context)
-        val intent = Intent(context, MainActivity::class.java).apply {
+
+        // 点通知整体仍可跳转 app（打开记录弹窗），但不是必须的
+        val openIntent = Intent(context, MainActivity::class.java).apply {
             putExtra(MainActivity.EXTRA_HOUR, hour)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
-        val pending = PendingIntent.getActivity(
-            context, hour, intent,
+        val openPending = PendingIntent.getActivity(
+            context, hour, openIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+
+        // 自定义布局：5 个表情按钮，点任意一个直接记录
+        val views = RemoteViews(context.packageName, R.layout.notification_mood_chooser)
+        views.setTextViewText(
+            R.id.notification_title,
+            "现在心情怎么样？点一个表情，记录 ${String.format(Locale.CHINA, "%02d:00", hour)} 的心情"
+        )
+        NOTIFICATION_MOODS.forEach { (moodId, _) ->
+            val pending = PendingIntent.getBroadcast(
+                context,
+                moodId * 100 + hour,
+                Intent(context, ReminderReceiver::class.java).apply {
+                    action = ACTION_QUICK_MOOD
+                    putExtra(EXTRA_MOOD_ID, moodId)
+                    putExtra(EXTRA_HOUR, hour)
+                },
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            views.setOnClickPendingIntent(
+                context.resources.getIdentifier("btn_mood_$moodId", "id", context.packageName),
+                pending
+            )
+        }
+
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_mood)
-            .setContentTitle("现在心情怎么样？")
-            .setContentText("点一下，记录 ${String.format(Locale.CHINA, "%02d:00", hour)} 这一小时的心情")
+            .setCustomContentView(views)
+            .setStyle(NotificationCompat.DecoratedCustomViewStyle())
             .setAutoCancel(true)
-            .setContentIntent(pending)
+            .setContentIntent(openPending)
             .build()
-        context.getSystemService(NotificationManager::class.java).notify(hour, notification)
+
+        context.getSystemService(NotificationManager::class.java)
+            .notify(hour, notification)
+    }
+
+    /** 通知里点了表情：直接写库，不跳转 app */
+    fun recordQuickMood(context: Context, hour: Int, moodId: Int) {
+        val db = MoodDatabase.get(context)
+        val dao = db.dao()
+        val dateStr = LocalDate.now().toString()
+
+        // 用事务保证原子性：有则更新，无则插入
+        kotlinx.coroutines.runBlocking {
+            db.withTransaction {
+                val existing = dao.findByDateHour(dateStr, hour)
+                if (existing != null) {
+                    dao.update(existing.copy(moodId = moodId, updatedAt = System.currentTimeMillis()))
+                } else {
+                    dao.insert(MoodEntry(date = dateStr, hour = hour, moodId = moodId))
+                }
+            }
+        }
+
+        // 取消通知：已记录，不再需要提醒
+        context.getSystemService(NotificationManager::class.java)
+            .cancel(hour)
     }
 
     // ---------- 电池优化 ----------
 
-    /**
-     * 是否已被加入电池优化白名单。
-     * 返回 true 表示「不需要再引导」（即已忽略优化，或系统不支持）。
-     */
     fun isIgnoringBatteryOptimizations(context: Context): Boolean {
         if (Build.VERSION.SDK_INT < 23) return true
         val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         return pm.isIgnoringBatteryOptimizations(context.packageName)
     }
 
-    /** 跳转到系统的「忽略电池优化」设置页（部分 ROM 会落到电池设置页） */
     fun openBatteryOptimizationSettings(context: Context) {
         if (Build.VERSION.SDK_INT >= 23) {
             val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
@@ -196,7 +231,6 @@ object Reminder {
             }
             runCatching { context.startActivity(intent) }
                 .onFailure {
-                    // 有些 ROM 不支持上面的 Action，退回通用电池设置页
                     runCatching {
                         context.startActivity(
                             Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)

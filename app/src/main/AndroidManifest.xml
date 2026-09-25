@@ -36,6 +36,7 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="com.mooddiary.app.ACTION_REMINDER_TICK" />
+                <action android:name="com.mooddiary.app.ACTION_QUICK_MOOD" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>

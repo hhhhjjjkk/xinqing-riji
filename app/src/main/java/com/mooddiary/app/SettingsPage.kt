@@ -13,26 +13,28 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material3.*
-import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.util.Locale
 
 @Composable
 fun SettingsPage(
-    settings: AppSettings,
     store: SettingsStore,
     recordCount: Int,
     onClearAll: () -> Unit
 ) {
     val context = LocalContext.current
+    // 直接从 store collect，确保任何修改立刻反映到 UI
+    val settings by store.settings.collectAsStateWithLifecycle()
+
     // 进入页面时刷新一次：用户从系统设置返回后状态会变
     var ignoringBattery by remember { mutableStateOf(Reminder.isIgnoringBatteryOptimizations(context)) }
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -115,18 +117,18 @@ fun SettingsPage(
             }
         }
 
-        // 提醒可靠性：国产 ROM 上不处理电池优化，提醒基本不会来
+        // 提醒可靠性
         if (settings.reminderEnabled) {
             SettingsSection("提醒可靠性") {
                 Text(
-                    "已使用精确闹钟，理论上关掉 app、重启手机后仍会提醒。",
+                    "已使用精确闹钟，关掉 app、重启手机后仍会提醒。\n通知里可直接点表情快速记录，不用打开 app。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 if (!ignoringBattery) {
                     Spacer(Modifier.height(10.dp))
                     Text(
-                        "但系统可能为了省电推迟或拦截提醒。建议把本应用加入电池优化白名单。",
+                        "系统可能为了省电推迟或拦截提醒。建议把本应用加入电池优化白名单。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error
                     )
@@ -320,7 +322,6 @@ private fun HourButton(
     }
 }
 
-/** 24 小时点选弹窗：比滑动选择器更直观 */
 @Composable
 private fun HourPickerDialog(
     title: String,

@@ -357,7 +357,6 @@ fun MoodDiaryApp(
                 1 -> RecordsPage(entries) { e -> openEdit(LocalDate.parse(e.date), e.hour) }
                 2 -> StatsPage(month, entries, { month = it })
                 else -> SettingsPage(
-                    settings = settings,
                     store = store,
                     recordCount = entries.size,
                     onClearAll = {

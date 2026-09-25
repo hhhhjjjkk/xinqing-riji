@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  通知里的快速心情选择器。
+  5 个表情横向排列，点任意一个直接记录当前小时的心情，不跳转 app。
+  用 RemoteViews（传统 XML 布局），不能用 Compose。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingTop="4dp"
+    android:paddingBottom="4dp">
+
+    <TextView
+        android:id="@+id/notification_title"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="6dp"
+        android:textColor="#FFFFFF"
+        android:textSize="13sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:weightSum="5">
+
+        <LinearLayout
+            android:id="@+id/btn_mood_5"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="6dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless">
+
+            <TextView
+                android:id="@+id/emoji_5"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="26sp"
+                android:text="😄" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="#B0FFFFFF"
+                android:textSize="9sp"
+                android:text="开心" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/btn_mood_4"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="6dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless">
+
+            <TextView
+                android:id="@+id/emoji_4"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="26sp"
+                android:text="😌" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="#B0FFFFFF"
+                android:textSize="9sp"
+                android:text="平静" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/btn_mood_3"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="6dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless">
+
+            <TextView
+                android:id="@+id/emoji_3"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="26sp"
+                android:text="😐" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="#B0FFFFFF"
+                android:textSize="9sp"
+                android:text="一般" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/btn_mood_2"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="6dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless">
+
+            <TextView
+                android:id="@+id/emoji_2"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="26sp"
+                android:text="😔" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="#B0FFFFFF"
+                android:textSize="9sp"
+                android:text="低落" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/btn_mood_1"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="6dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless">
+
+            <TextView
+                android:id="@+id/emoji_1"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="26sp"
+                android:text="😡" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="#B0FFFFFF"
+                android:textSize="9sp"
+                android:text="生气" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>
