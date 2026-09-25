@@ -60,10 +60,26 @@ MOODDIARY_KEY_PASSWORD=你的密码
 app/src/main/java/com/mooddiary/app/
     MainActivity.kt      # 数据层（实体/DAO/数据库/仓库）+ 全部 Compose UI
     ReminderWorker.kt    # 每小时提醒：开关、通知渠道、WorkManager 调度
-app/src/main/res/        # 图标与资源
-app/src/test/            # 数据层回归测试（Robolectric + 内存 Room）
+app/src/main/res/
+    drawable/ic_launcher_background.xml   # 自适应图标背景层（纯白矢量，铺满画布）
+    mipmap-{m,h,xh,xxh,xxx}dpi/           # 各密度的前景图与传统方形/圆形图标
+    mipmap-anydpi-v26/                    # 自适应图标定义（API 26+）
+app/src/test/            # 数据层回归测试（纯 JVM，用内存 FakeMoodStore）
 app/schemas/             # Room schema 导出，用于审查与迁移测试
 ```
+
+## 🎨 应用图标
+
+图标为「日记本 + 铅笔 + 爱心」线稿（深蓝 `#193879`），由用户提供的
+JPEG 生成：白底已转透明，边缘抗锯齿保留为半透明，任何底色下都不露白边。
+
+- **自适应图标**（Android 8.0+）：图案占可见区（中心 72dp）约 76%，
+  处于系统安全区内，不会被圆形/方形遮罩裁到
+- **传统图标**：同时提供方形与圆形，兼容 Android 7.x（API 24/25）
+- **白色背景层**：图案是深蓝线条，白底保证在深色与浅色壁纸下都清晰；
+  背景矢量铺满整个 108dp 画布（只画中心会让可见区四角露出壁纸）
+
+重新生成图标见 `tools/make-icons.md`。
 
 ## 🗄 数据库
 
