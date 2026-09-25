@@ -13,7 +13,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -33,6 +32,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -49,14 +49,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.room.*
 import androidx.room.withTransaction
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -235,7 +234,14 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         openHour.value = intent.getIntExtra(EXTRA_HOUR, -1).takeIf { it >= 0 }
-        setContent { MoodDiaryTheme { MoodDiaryApp(openHour = openHour) } }
+        val store = SettingsStore(this)
+        store.syncReminder()
+        setContent {
+            val settings by store.settings.collectAsStateWithLifecycle()
+            MoodDiaryTheme(themeMode = settings.themeMode) {
+                MoodDiaryApp(openHour = openHour, settingsStore = store)
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -249,8 +255,8 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun MoodDiaryTheme(content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
+fun MoodDiaryTheme(themeMode: ThemeMode = ThemeMode.SYSTEM, content: @Composable () -> Unit) {
+    val dark = shouldUseDarkTheme(themeMode)
     MaterialTheme(
         colorScheme = if (dark) {
             darkColorScheme(primary = Color(0xFFFFB300), secondary = Color(0xFFFFCC66))
@@ -279,8 +285,12 @@ private data class PendingConflict(
 @Composable
 fun MoodDiaryApp(
     vm: MoodViewModel = androidx.lifecycle.viewmodel.compose.viewModel(),
-    openHour: MutableState<Int?> = mutableStateOf(null)
+    openHour: MutableState<Int?> = mutableStateOf(null),
+    settingsStore: SettingsStore? = null
 ) {
+    val context = LocalContext.current
+    val store = settingsStore ?: remember { SettingsStore(context) }
+    val settings by store.settings.collectAsStateWithLifecycle()
     val entries by vm.entries.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var month by rememberSaveable { mutableStateOf(YearMonth.now()) }
@@ -301,14 +311,15 @@ fun MoodDiaryApp(
     val navItems = listOf(
         "日历" to Icons.Default.CalendarMonth,
         "记录" to Icons.Default.List,
-        "统计" to Icons.Default.BarChart
+        "统计" to Icons.Default.BarChart,
+        "设置" to Icons.Default.Settings
     )
 
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
                 title = { Text("心情日记", fontWeight = FontWeight.Bold) },
-                actions = { ReminderToggle() }
+                actions = { if (tab != 3) ReminderToggle(store) }
             )
         },
         bottomBar = {
@@ -324,7 +335,7 @@ fun MoodDiaryApp(
             }
         },
         floatingActionButton = {
-            if (tab != 2) {
+            if (tab == 0 || tab == 1) {
                 FloatingActionButton(onClick = { openEdit(LocalDate.now(), LocalTime.now().hour) }) {
                     Icon(Icons.Default.Add, "新增记录")
                 }
@@ -333,9 +344,25 @@ fun MoodDiaryApp(
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (tab) {
-                0 -> CalendarPage(month, entries, { month = it }, { d -> hourSheetDate = d })
+                0 -> CalendarPage(
+                    month, entries,
+                    weekStart = settings.weekStart,
+                    setMonth = { month = it },
+                    open = { d -> hourSheetDate = d }
+                )
                 1 -> RecordsPage(entries) { e -> openEdit(LocalDate.parse(e.date), e.hour) }
-                else -> StatsPage(month, entries, { month = it })
+                2 -> StatsPage(month, entries, { month = it })
+                else -> SettingsPage(
+                    settings = settings,
+                    store = store,
+                    recordCount = entries.size,
+                    onClearAll = {
+                        scope.launch {
+                            entries.forEach { vm.delete(it) }
+                            toast(context, "已清空全部记录")
+                        }
+                    }
+                )
             }
         }
     }
@@ -352,6 +379,7 @@ fun MoodDiaryApp(
     editTarget?.let { (d, h, entry) ->
         MoodDialog(
             d, h, entry,
+            defaultMoodId = settings.defaultMoodId,
             onDismiss = { editTarget = null },
             onSave = { dt, hh, m, n ->
                 val old = editTarget?.third
@@ -414,12 +442,17 @@ private fun ConflictDialog(pending: PendingConflict, onCancel: () -> Unit, onOve
 fun CalendarPage(
     month: YearMonth,
     entries: List<MoodEntry>,
+    weekStart: WeekStart = WeekStart.SUNDAY,
     setMonth: (YearMonth) -> Unit,
     open: (LocalDate) -> Unit
 ) {
     val latestByDay = remember(entries) {
         entries.groupBy { it.date }.mapValues { (_, list) -> list.maxByOrNull { it.hour } }
     }
+    val weekLabels = if (weekStart == WeekStart.SUNDAY)
+        listOf("日", "一", "二", "三", "四", "五", "六")
+    else
+        listOf("一", "二", "三", "四", "五", "六", "日")
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
             TextButton(onClick = { setMonth(month.minusMonths(1)) }) { Text("‹ 上月") }
@@ -436,7 +469,7 @@ fun CalendarPage(
         ) { Text("回到今天") }
 
         Row(Modifier.fillMaxWidth()) {
-            listOf("日", "一", "二", "三", "四", "五", "六").forEach {
+            weekLabels.forEach {
                 Text(
                     it, Modifier.weight(1f),
                     textAlign = TextAlign.Center,
@@ -447,7 +480,12 @@ fun CalendarPage(
         }
 
         val start = month.atDay(1)
-        val paddingDays = start.dayOfWeek.value % 7
+        // dayOfWeek.value: 周一=1 … 周日=7
+        val paddingDays = if (weekStart == WeekStart.SUNDAY) {
+            start.dayOfWeek.value % 7          // 周日排在首列
+        } else {
+            (start.dayOfWeek.value + 5) % 7    // 周一排在首列
+        }
         val total = paddingDays + month.lengthOfMonth()
         val rows = (total + 6) / 7
         repeat(rows) { row ->
@@ -718,13 +756,14 @@ fun MoodDialog(
     date: LocalDate,
     hour: Int,
     entry: MoodEntry?,
+    defaultMoodId: Int = 5,
     onDismiss: () -> Unit,
     onSave: (LocalDate, Int, Int, String) -> Unit,
     onDelete: () -> Unit
 ) {
     val context = LocalContext.current
     var d by remember(entry, date) { mutableStateOf(date) }
-    var selected by remember(entry) { mutableIntStateOf(entry?.moodId ?: 5) }
+    var selected by remember(entry) { mutableIntStateOf(entry?.moodId ?: defaultMoodId) }
     var note by remember(entry) { mutableStateOf(entry?.note ?: "") }
 
     AlertDialog(
@@ -799,23 +838,15 @@ fun MoodDialog(
 }
 
 @Composable
-fun ReminderToggle() {
+fun ReminderToggle(store: SettingsStore) {
     val context = LocalContext.current
-    var enabled by remember { mutableStateOf(Reminder.isEnabled(context)) }
-
-    // 从系统设置返回时重新读取，避免开关状态与实际权限不一致
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) enabled = Reminder.isEnabled(context)
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    // 状态由设置统一管理，避免顶栏开关与设置页出现两份真值不同步
+    val reminderEnabled by produceState(initialValue = store.settings.value.reminderEnabled, store) {
+        store.settings.collect { value = it.reminderEnabled }
     }
 
     fun enable() {
-        Reminder.setEnabled(context, true)
-        enabled = true
+        store.setReminderEnabled(true)
         toast(context, "已开启每小时心情提醒")
     }
 
@@ -826,9 +857,8 @@ fun ReminderToggle() {
 
     IconButton(onClick = {
         when {
-            enabled -> {
-                Reminder.setEnabled(context, false)
-                enabled = false
+            reminderEnabled -> {
+                store.setReminderEnabled(false)
                 toast(context, "已关闭每小时心情提醒")
             }
             Reminder.hasNotificationPermission(context) -> enable()
@@ -836,9 +866,10 @@ fun ReminderToggle() {
         }
     }) {
         Icon(
-            if (enabled) Icons.Default.Notifications else Icons.Default.NotificationsOff,
-            if (enabled) "关闭每小时提醒" else "开启每小时提醒",
-            tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+            if (reminderEnabled) Icons.Default.Notifications else Icons.Default.NotificationsOff,
+            if (reminderEnabled) "关闭每小时提醒" else "开启每小时提醒",
+            tint = if (reminderEnabled) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }

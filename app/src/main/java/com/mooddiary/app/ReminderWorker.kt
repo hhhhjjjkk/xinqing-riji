@@ -71,6 +71,12 @@ class ReminderWorker(context: Context, params: WorkerParameters) : CoroutineWork
         if (!Reminder.hasNotificationPermission(context)) return Result.success()
 
         val hour = LocalTime.now().hour
+
+        // 免打扰时段内不提醒（跨天时段如 22→8 也能正确处理）
+        if (QuietHours.isQuiet(SettingsStore(context).settings.value, hour)) {
+            return Result.success()
+        }
+
         // 本小时已记录过心情则不打扰
         val recorded = MoodDatabase.get(context).dao().findByDateHour(LocalDate.now().toString(), hour) != null
         if (recorded) return Result.success()
