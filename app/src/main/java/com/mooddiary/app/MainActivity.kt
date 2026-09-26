@@ -381,7 +381,6 @@ fun MoodDiaryApp(
     val store = settingsStore ?: remember { SettingsStore(context) }
     val settings by store.settings.collectAsStateWithLifecycle(initialValue = store.current())
     val entries by vm.entries.collectAsStateWithLifecycle()
-    var tab by rememberSaveable(startTab) { mutableIntStateOf(startTab) }
     var month by rememberSaveable { mutableStateOf(YearMonth.now()) }
     var hourSheetDate by remember { mutableStateOf<LocalDate?>(null) }
     var editTarget by remember { mutableStateOf<Triple<LocalDate, Int, MoodEntry?>?>(null) }
@@ -404,44 +403,45 @@ fun MoodDiaryApp(
         "设置" to Icons.Default.Settings
     )
 
+    // 分页器是「当前在哪一页」的唯一来源。
+    // 之前同时保留 tab 状态 + pager，再用 LaunchedEffect 互相同步，
+    // 形成回环：点击一项后，另一个 effect 又去滚回旧页，
+    // 表现为卡住、跳到别页、或点一次不生效要点两次。
+    // 现在点击直接滚动分页器，滑动自动反映到 currentPage，没有任何回写。
+    val pagerState = rememberPagerState(
+        initialPage = startTab,
+        initialPageOffsetFraction = 0f,
+        pageCount = { navItems.size }
+    )
+
+    // 记住最近一次的目标页：动画进行中重复点同一项不再重启动画
+    // （animateScrollToPage 会取消并重建动画，连点会显得迟滞）
+    var pendingPage by remember { mutableIntStateOf(startTab) }
+
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
                 title = { Text("心情日记", fontWeight = FontWeight.Bold) },
-                actions = { if (tab != 3) ReminderToggle(store) }
+                actions = { if (pagerState.currentPage != 3) ReminderToggle(store) }
             )
         },
         // 悬浮胶囊导航：不贴边、圆角、中间是大号主操作按钮（参考常见社区类 App）
         bottomBar = {
             FloatingNavBar(
                 items = navItems,
-                selected = tab,
-                onSelect = { tab = it },
+                selected = pagerState.currentPage,
+                onSelect = { page ->
+                    if (page != pendingPage || !pagerState.isScrollInProgress) {
+                        pendingPage = page
+                        scope.launch {
+                            pagerState.animateScrollToPage(page)
+                        }
+                    }
+                },
                 onAdd = { openEdit(LocalDate.now(), LocalTime.now().hour) }
             )
         }
     ) { padding ->
-        val pagerState = rememberPagerState(
-            initialPage = tab,
-            initialPageOffsetFraction = 0f,
-            pageCount = { navItems.size }
-        )
-
-        // 以 pager 为唯一数据源，避免双向同步互相打架导致卡在中间。
-        // settledPage 只在滚动真正停止（吸附完成）时更新，
-        // 因此手势滑动到一半松手也能正确落到目标页，不会卡住。
-        LaunchedEffect(pagerState) {
-            snapshotFlow { pagerState.settledPage }
-                .distinctUntilChanged()
-                .collect { page -> if (page != tab) tab = page }
-        }
-        // 点击导航项 → 翻页（仅在目标不同时才动）
-        LaunchedEffect(tab) {
-            if (pagerState.settledPage != tab) {
-                pagerState.animateScrollToPage(tab)
-            }
-        }
-
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.padding(padding).fillMaxSize(),
@@ -597,8 +597,16 @@ private fun NavItem(
     val bg = if (selected) accent.copy(alpha = 0.14f) else Color.Transparent
     val border = if (selected) accent.copy(alpha = 0.45f) else Color.Transparent
 
-    // 外层按 weight 均分空间，内层高光胶囊固定尺寸 → 布局统一
-    Box(modifier, contentAlignment = Alignment.Center) {
+    // 点击热区挂在外层整块（含 weight 分到的全部空间），
+    // 内层只是固定尺寸的视觉胶囊。
+    // 之前点击只绑在 66dp 的胶囊上，点在项与项之间的空隙会被吞掉，
+    // 表现为「点一下没反应，要点两下」。
+    Box(
+        modifier
+            .clip(RoundedCornerShape(percent = 50))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
@@ -607,7 +615,6 @@ private fun NavItem(
                 .clip(RoundedCornerShape(percent = 50))
                 .background(bg)
                 .border(1.dp, border, RoundedCornerShape(percent = 50))
-                .clickable(onClick = onClick)
         ) {
             Icon(
                 icon, label,
