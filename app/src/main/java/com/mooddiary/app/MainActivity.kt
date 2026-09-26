@@ -367,7 +367,7 @@ private data class PendingConflict(
     val conflict: MoodEntry
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun MoodDiaryApp(
     vm: MoodViewModel = androidx.lifecycle.viewmodel.compose.viewModel(),
