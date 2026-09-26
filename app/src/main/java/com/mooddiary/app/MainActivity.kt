@@ -15,7 +15,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.unit.Constraints
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.animateFloatAsState
@@ -560,13 +559,19 @@ fun MoodDiaryApp(
  *
  * 高光椭圆是独立浮层，绘制在导航栏之上，放大时可超出导航栏边界。
  *
- * 三个关键实现点（都是踩过的坑）：
- * 1. 椭圆尺寸固定，放大只用 graphicsLayer 缩放，不参与布局测量。
- *    否则放大时会把底栏撑高，导致导航栏与右下角按钮一起抖动。
- * 2. 手势挂在不移动的整块浮层上。若挂在椭圆自身，椭圆移动会改变
- *    其局部坐标系，拖动位移的计算会错乱。
- * 3. pointerInput 的 key 用 items.size 这种稳定值。若用当前选中项作 key，
- *    拖动切换页面会导致 pointerInput 重启、手势被取消，于是永远拖不动。
+ * 关键：整个导航栏只保留**一个**指针处理层，它同时负责
+ *   ① 点击任意槽位 → 切换页面
+ *   ② 长按高光椭圆 → 放大并左右拖动切换页面
+ *
+ * 之前把 clickable 放在下层、手势层铺在上层，导致上层节点独占了指针事件
+ * （Compose 默认不与兄弟节点共享指针事件），下层点击全部失效。
+ * 现在合并为一层，不再有事件被拦截的问题。
+ *
+ * 另外两个坑：
+ * - 椭圆尺寸固定、放大只用 graphicsLayer 缩放，不参与布局测量，
+ *   否则放大时会把底栏撑高，导航栏与角落按钮一起抖动。
+ * - pointerInput 的 key 用 items.size 这种稳定值。若用当前选中项作 key，
+ *   拖动切换页面会导致 pointerInput 重启、手势被取消，于是拖不动。
  */
 @Composable
 fun FloatingNavBar(
@@ -582,6 +587,7 @@ fun FloatingNavBar(
     var scrubIndex by remember { mutableIntStateOf(selected) }
 
     val currentSelected by rememberUpdatedState(selected)
+    val currentOnSelect by rememberUpdatedState(onSelect)
     val currentOnScrub by rememberUpdatedState(onScrub)
 
     val highlightScale by animateFloatAsState(
@@ -604,14 +610,13 @@ fun FloatingNavBar(
         val activeIndex = if (scrubbing) scrubIndex else selected
         val accent = MaterialTheme.colorScheme.primary
 
-        // ① 导航栏本体
+        // ① 导航栏本体（纯展示，不处理点击）
         Surface(
             shape = RoundedCornerShape(percent = 50),
             color = MaterialTheme.colorScheme.surface,
             border = androidx.compose.foundation.BorderStroke(
                 1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
             ),
-            // 不设阴影：悬浮感由描边提供，避免点击/长按时出现多余的阴影跳变
             tonalElevation = 0.dp,
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -626,12 +631,12 @@ fun FloatingNavBar(
                         active = idx == activeIndex,
                         accent = accent,
                         modifier = Modifier.weight(1f)
-                    ) { onSelect(idx) }
+                    )
                 }
             }
         }
 
-        // ② 高光椭圆浮层：固定尺寸 + graphicsLayer 缩放，不引起任何布局变化
+        // ② 高光椭圆浮层：固定尺寸 + graphicsLayer 缩放，不引起布局变化
         Box(
             Modifier
                 .align(Alignment.CenterStart)
@@ -646,11 +651,16 @@ fun FloatingNavBar(
                 .border(1.5.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(percent = 50))
         )
 
-        // ③ 手势层：铺满导航栏但不绘制内容；只有按下点落在椭圆内才响应
+        // ③ 唯一的指针处理层：点击切页 + 长按椭圆拖动
         val wPx = with(density) { HIGHLIGHT_W.toPx() }
         val hPx = with(density) { HIGHLIGHT_H.toPx() }
         val slotPx = with(density) { slotW.toPx() }
+        val rowPadPx = with(density) { rowPad.toPx() }
         val tolPx = with(density) { 8.dp.toPx() }
+        val topPx = with(density) { 6.dp.toPx() }
+
+        fun slotAt(x: Float): Int =
+            ((x - rowPadPx) / slotPx).toInt().coerceIn(0, items.size - 1)
 
         Box(
             Modifier
@@ -658,41 +668,57 @@ fun FloatingNavBar(
                 .pointerInput(items.size) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
-                        // 命中检测：必须按在当前高光椭圆范围内
+                        val slop = viewConfiguration.touchSlop
                         val cx = with(density) { centerX(currentSelected).toPx() }
                         val left = cx - wPx / 2f
-                        // 椭圆垂直居中于导航栏，其顶边恒为 Row 的垂直内边距(6dp)
-                        val top = with(density) { 6.dp.toPx() }
-                        val inside = down.position.x >= left - tolPx &&
+                        val inEllipse =
+                            down.position.x >= left - tolPx &&
                             down.position.x <= left + wPx + tolPx &&
-                            down.position.y >= top - tolPx &&
-                            down.position.y <= top + hPx + tolPx
-                        if (!inside) return@awaitEachGesture   // 按在空白处：不处理
+                            down.position.y >= topPx - tolPx &&
+                            down.position.y <= topPx + hPx + tolPx
 
-                        // 自定义长按阈值：系统默认约 500ms，对"长按拖动"这种
-                        // 高频交互太慢，这里用 250ms。
-                        // 期间若抬起或移动超过 slop，则视为普通点击/滑动，不进入拖动。
+                        if (!inEllipse) {
+                            // —— 普通点击：等待抬起；移动超过 slop 则视为滑动，忽略 ——
+                            var tapped = false
+                            while (true) {
+                                val ev = awaitPointerEvent()
+                                val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!ch.pressed) { tapped = true; break }
+                                val dx = ch.position.x - down.position.x
+                                val dy = ch.position.y - down.position.y
+                                if (dx * dx + dy * dy > slop * slop) break
+                            }
+                            if (tapped) currentOnSelect(slotAt(down.position.x))
+                            return@awaitEachGesture
+                        }
+
+                        // —— 按在椭圆上：等 250ms 判定长按 ——
+                        var moved = false
+                        var released = false
                         var confirmed = false
                         withTimeoutOrNull(250L) {
                             while (true) {
-                                val event = awaitPointerEvent()
-                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                                if (!change.pressed) break
-                                val dx = change.position.x - down.position.x
-                                val dy = change.position.y - down.position.y
-                                if (dx * dx + dy * dy > viewConfiguration.touchSlop * viewConfiguration.touchSlop) break
+                                val ev = awaitPointerEvent()
+                                val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!ch.pressed) { released = true; break }
+                                val dx = ch.position.x - down.position.x
+                                val dy = ch.position.y - down.position.y
+                                if (dx * dx + dy * dy > slop * slop) { moved = true; break }
                             }
                         } ?: run { confirmed = true }
+
+                        // 提前抬起 → 当普通点击处理（点的是当前项，等价于无操作，但保持反馈一致）
+                        if (released) { currentOnSelect(slotAt(down.position.x)); return@awaitEachGesture }
+                        // 提前移动 → 放弃，不进入拖动
                         if (!confirmed) return@awaitEachGesture
 
-                        // 进入拖动态
+                        // —— 进入拖动态 ——
                         var idx = currentSelected
                         scrubIndex = idx
                         scrubbing = true
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         down.consume()
 
-                        // 拖动：跨半格切换一页
                         var acc = 0f
                         drag(down.id) { change ->
                             change.consume()
@@ -720,27 +746,16 @@ private const val HIGHLIGHT_LIFT_SCALE = 1.25f
 private val HIGHLIGHT_W = 66.dp
 private val HIGHLIGHT_H = 48.dp
 
+/** 导航项：纯展示，点击由导航栏的指针层统一处理 */
 @Composable
 private fun NavItem(
     label: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     active: Boolean,
     accent: Color,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
+    modifier: Modifier = Modifier
 ) {
-    val interaction = remember { MutableInteractionSource() }
-    // 去掉点击时的水波纹/按压反馈（用户反馈点击导航栏会出现多余阴影感）
-    Box(
-        modifier
-            .clip(RoundedCornerShape(percent = 50))
-            .clickable(
-                interactionSource = interaction,
-                indication = null,
-                onClick = onClick
-            ),
-        contentAlignment = Alignment.Center
-    ) {
+    Box(modifier, contentAlignment = Alignment.Center) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
