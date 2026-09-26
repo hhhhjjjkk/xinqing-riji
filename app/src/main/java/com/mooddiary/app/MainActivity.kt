@@ -490,8 +490,7 @@ fun MoodDiaryApp(
 
 /**
  * 悬浮胶囊导航栏。
- * 左侧 2 项 + 中间大号主操作按钮 + 右侧 2 项；选中项用强调色图标+文字，
- * 不用 Material 默认的背景指示器，视觉上更轻。
+ * 选中项有一个淡强调色的椭圆高亮底（带描边），中间是药丸形主操作按钮。
  */
 @Composable
 fun FloatingNavBar(
@@ -504,48 +503,49 @@ fun FloatingNavBar(
         Surface(
             shape = RoundedCornerShape(percent = 50),
             color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp,
-            shadowElevation = 8.dp,
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+            ),
+            tonalElevation = 4.dp,
+            shadowElevation = 6.dp,
             modifier = Modifier.fillMaxWidth()
         ) {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 8.dp),
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 val accent = MaterialTheme.colorScheme.primary
-                val inactive = MaterialTheme.colorScheme.onSurfaceVariant
 
                 // 左侧两项
                 items.take(2).forEachIndexed { idx, item ->
                     NavItem(
-                        label = item.first,
-                        icon = item.second,
+                        label = item.first, icon = item.second,
                         selected = selected == idx,
-                        tint = if (selected == idx) accent else inactive
+                        accent = accent
                     ) { onSelect(idx) }
                 }
 
-                // 中间主操作按钮
+                // 中间主操作按钮：药丸形，略高于其他项
                 Box(
                     Modifier
-                        .size(width = 84.dp, height = 52.dp)
+                        .padding(horizontal = 6.dp)
+                        .size(width = 64.dp, height = 46.dp)
                         .clip(RoundedCornerShape(percent = 50))
                         .background(accent)
                         .clickable(onClick = onAdd),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Default.Add, "新增记录", tint = Color.White, modifier = Modifier.size(28.dp))
+                    Icon(Icons.Default.Add, "新增记录", tint = Color.White, modifier = Modifier.size(24.dp))
                 }
 
                 // 右侧两项
                 items.drop(2).forEachIndexed { idx, item ->
                     val realIdx = idx + 2
                     NavItem(
-                        label = item.first,
-                        icon = item.second,
+                        label = item.first, icon = item.second,
                         selected = selected == realIdx,
-                        tint = if (selected == realIdx) accent else inactive
+                        accent = accent
                     ) { onSelect(realIdx) }
                 }
             }
@@ -558,18 +558,31 @@ private fun NavItem(
     label: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     selected: Boolean,
-    tint: Color,
+    accent: Color,
     onClick: () -> Unit
 ) {
+    // 选中态：淡强调色椭圆底 + 描边
+    val bg = if (selected) accent.copy(alpha = 0.14f) else Color.Transparent
+    val border = if (selected) accent.copy(alpha = 0.45f) else Color.Transparent
+
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
+            .widthIn(min = 64.dp)
+            .clip(RoundedCornerShape(percent = 50))
+            .background(bg)
+            .border(1.dp, border, RoundedCornerShape(percent = 50))
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 2.dp)
+            .padding(horizontal = 10.dp, vertical = 4.dp)
     ) {
-        Icon(icon, label, tint = tint, modifier = Modifier.size(24.dp))
-        Text(label, fontSize = 11.sp, color = tint, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+        Icon(icon, label, tint = if (selected) accent else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(24.dp))
+        Text(
+            label,
+            fontSize = 11.sp,
+            color = if (selected) accent else MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+        )
     }
 }
 
