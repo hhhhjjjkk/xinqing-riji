@@ -267,22 +267,56 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** 各主题色预设的强调色（浅/深两套） */
-private fun accentSeed(color: AccentColor): androidx.compose.ui.graphics.Color = when (color) {
-    AccentColor.AMBER -> Color(0xFFE48600)
-    AccentColor.BLUE -> Color(0xFF2B54A8)
-    AccentColor.GREEN -> Color(0xFF2E7D5B)
-    AccentColor.PURPLE -> Color(0xFF7A4FA3)
-    AccentColor.PINK -> Color(0xFFC2185B)
-}
+/**
+ * 每个主题色的完整色板。
+ *
+ * 之前只覆盖 primary，而 Material3 组件大量使用 primaryContainer /
+ * secondaryContainer / onXxxContainer（统计卡片、chip 选中底色、导航指示器等），
+ * 导致换主题色后统计页等处仍是旧色。这里把整组都定义出来。
+ */
+data class AccentScheme(
+    val lightPrimary: Long,
+    val lightOnPrimary: Long,
+    val lightContainer: Long,
+    val lightOnContainer: Long,
+    val darkPrimary: Long,
+    val darkOnPrimary: Long,
+    val darkContainer: Long,
+    val darkOnContainer: Long
+)
 
-private fun darkSeed(color: AccentColor): androidx.compose.ui.graphics.Color = when (color) {
-    AccentColor.AMBER -> Color(0xFFFFB300)
-    AccentColor.BLUE -> Color(0xFF7EA6E8)
-    AccentColor.GREEN -> Color(0xFF5FC99A)
-    AccentColor.PURPLE -> Color(0xFFC4A3E8)
-    AccentColor.PINK -> Color(0xFFFF8CA8)
-}
+private val ACCENTS: Map<AccentColor, AccentScheme> = mapOf(
+    AccentColor.AMBER to AccentScheme(
+        lightPrimary = 0xFFE48600, lightOnPrimary = 0xFFFFFFFF,
+        lightContainer = 0xFFFFDDB3, lightOnContainer = 0xFF2E1500,
+        darkPrimary = 0xFFFFB95C, darkOnPrimary = 0xFF4A2800,
+        darkContainer = 0xFF5D3F00, darkOnContainer = 0xFFFFDDB3
+    ),
+    AccentColor.BLUE to AccentScheme(
+        lightPrimary = 0xFF2B54A8, lightOnPrimary = 0xFFFFFFFF,
+        lightContainer = 0xFFD8E2FF, lightOnContainer = 0xFF001945,
+        darkPrimary = 0xFFAEC6FF, darkOnPrimary = 0xFF002A65,
+        darkContainer = 0xFF00306E, darkOnContainer = 0xFFD8E2FF
+    ),
+    AccentColor.GREEN to AccentScheme(
+        lightPrimary = 0xFF2E7D5B, lightOnPrimary = 0xFFFFFFFF,
+        lightContainer = 0xFFB0F0CE, lightOnContainer = 0xFF002115,
+        darkPrimary = 0xFF5FC99A, darkOnPrimary = 0xFF003823,
+        darkContainer = 0xFF00512F, darkOnContainer = 0xFFB0F0CE
+    ),
+    AccentColor.PURPLE to AccentScheme(
+        lightPrimary = 0xFF7A4FA3, lightOnPrimary = 0xFFFFFFFF,
+        lightContainer = 0xFFEFD9FF, lightOnContainer = 0xFF2A1150,
+        darkPrimary = 0xFFC4A3E8, darkOnPrimary = 0xFF421B67,
+        darkContainer = 0xFF4B2672, darkOnContainer = 0xFFEFD9FF
+    ),
+    AccentColor.PINK to AccentScheme(
+        lightPrimary = 0xFFC2185B, lightOnPrimary = 0xFFFFFFFF,
+        lightContainer = 0xFFFFD9E2, lightOnContainer = 0xFF3E001D,
+        darkPrimary = 0xFFFF8CA8, darkOnPrimary = 0xFF5E1130,
+        darkContainer = 0xFF732945, darkOnContainer = 0xFFFFD9E2
+    )
+)
 
 @Composable
 fun MoodDiaryTheme(
@@ -293,16 +327,29 @@ fun MoodDiaryTheme(
 ) {
     val dark = shouldUseDarkTheme(themeMode)
     val context = LocalContext.current
-
-    // Android 12+ 且用户开启时，从壁纸取色
-    val dynamicAvailable = Build.VERSION.SDK_INT >= 31
-    val canDynamic = useDynamicColor && dynamicAvailable
+    val canDynamic = useDynamicColor && Build.VERSION.SDK_INT >= 31
 
     val colorScheme = when {
         canDynamic && dark -> dynamicDarkColorScheme(context)
         canDynamic && !dark -> dynamicLightColorScheme(context)
-        dark -> darkColorScheme(primary = darkSeed(accentColor))
-        else -> lightColorScheme(primary = accentSeed(accentColor))
+        else -> {
+            val a = ACCENTS.getValue(accentColor)
+            val primary = Color(if (dark) a.darkPrimary else a.lightPrimary)
+            val onPrimary = Color(if (dark) a.darkOnPrimary else a.lightOnPrimary)
+            val container = Color(if (dark) a.darkContainer else a.lightContainer)
+            val onContainer = Color(if (dark) a.darkOnContainer else a.lightOnContainer)
+            if (dark) darkColorScheme(
+                primary = primary, onPrimary = onPrimary,
+                primaryContainer = container, onPrimaryContainer = onContainer,
+                secondary = primary, onSecondary = onPrimary,
+                secondaryContainer = container, onSecondaryContainer = onContainer
+            ) else lightColorScheme(
+                primary = primary, onPrimary = onPrimary,
+                primaryContainer = container, onPrimaryContainer = onContainer,
+                secondary = primary, onSecondary = onPrimary,
+                secondaryContainer = container, onSecondaryContainer = onContainer
+            )
+        }
     }
 
     MaterialTheme(colorScheme = colorScheme, content = content)
@@ -360,24 +407,14 @@ fun MoodDiaryApp(
                 actions = { if (tab != 3) ReminderToggle(store) }
             )
         },
+        // 悬浮胶囊导航：不贴边、圆角、中间是大号主操作按钮（参考常见社区类 App）
         bottomBar = {
-            NavigationBar {
-                navItems.forEachIndexed { i, item ->
-                    NavigationBarItem(
-                        selected = tab == i,
-                        onClick = { tab = i },
-                        icon = { Icon(item.second, item.first) },
-                        label = { Text(item.first) }
-                    )
-                }
-            }
-        },
-        floatingActionButton = {
-            if (tab == 0 || tab == 1) {
-                FloatingActionButton(onClick = { openEdit(LocalDate.now(), LocalTime.now().hour) }) {
-                    Icon(Icons.Default.Add, "新增记录")
-                }
-            }
+            FloatingNavBar(
+                items = navItems,
+                selected = tab,
+                onSelect = { tab = it },
+                onAdd = { openEdit(LocalDate.now(), LocalTime.now().hour) }
+            )
         }
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
@@ -448,6 +485,91 @@ fun MoodDiaryApp(
                 scope.launch { vm.overwrite(p.date, p.hour, p.moodId, p.note, p.old, p.conflict) }
             }
         )
+    }
+}
+
+/**
+ * 悬浮胶囊导航栏。
+ * 左侧 2 项 + 中间大号主操作按钮 + 右侧 2 项；选中项用强调色图标+文字，
+ * 不用 Material 默认的背景指示器，视觉上更轻。
+ */
+@Composable
+fun FloatingNavBar(
+    items: List<Pair<String, androidx.compose.ui.graphics.vector.ImageVector>>,
+    selected: Int,
+    onSelect: (Int) -> Unit,
+    onAdd: () -> Unit
+) {
+    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+        Surface(
+            shape = RoundedCornerShape(percent = 50),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+            shadowElevation = 8.dp,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val accent = MaterialTheme.colorScheme.primary
+                val inactive = MaterialTheme.colorScheme.onSurfaceVariant
+
+                // 左侧两项
+                items.take(2).forEachIndexed { idx, item ->
+                    NavItem(
+                        label = item.first,
+                        icon = item.second,
+                        selected = selected == idx,
+                        tint = if (selected == idx) accent else inactive
+                    ) { onSelect(idx) }
+                }
+
+                // 中间主操作按钮
+                Box(
+                    Modifier
+                        .size(width = 84.dp, height = 52.dp)
+                        .clip(RoundedCornerShape(percent = 50))
+                        .background(accent)
+                        .clickable(onClick = onAdd),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Add, "新增记录", tint = Color.White, modifier = Modifier.size(28.dp))
+                }
+
+                // 右侧两项
+                items.drop(2).forEachIndexed { idx, item ->
+                    val realIdx = idx + 2
+                    NavItem(
+                        label = item.first,
+                        icon = item.second,
+                        selected = selected == realIdx,
+                        tint = if (selected == realIdx) accent else inactive
+                    ) { onSelect(realIdx) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NavItem(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    selected: Boolean,
+    tint: Color,
+    onClick: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 2.dp)
+    ) {
+        Icon(icon, label, tint = tint, modifier = Modifier.size(24.dp))
+        Text(label, fontSize = 11.sp, color = tint, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
     }
 }
 
@@ -705,98 +827,163 @@ fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) 
         runCatching { YearMonth.from(LocalDate.parse(it.date)) }.getOrNull() == month
     }
     val latestByDay = inMonth.groupBy { it.date }.mapValues { (_, list) -> list.maxByOrNull { it.hour }!! }
+    val days = latestByDay.values
+    val accent = MaterialTheme.colorScheme.primary
+    val onAccent = MaterialTheme.colorScheme.onPrimary
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-            TextButton(onClick = { setMonth(month.minusMonths(1)) }) { Text("‹") }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+
+        // —— 月份切换 + 主色横幅 ——
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+            Arrangement.SpaceBetween, Alignment.CenterVertically
+        ) {
+            TextButton(onClick = { setMonth(month.minusMonths(1)) }) { Text("‹ 上月") }
             Text(
-                "${month.year}年${month.monthValue}月统计",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
+                "${month.year} 年 ${month.monthValue} 月",
+                style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold
             )
-            TextButton(onClick = { setMonth(month.plusMonths(1)) }) { Text("›") }
+            TextButton(onClick = { setMonth(month.plusMonths(1)) }) { Text("下月 ›") }
         }
-        TextButton(
-            onClick = { setMonth(YearMonth.now()) },
-            modifier = Modifier.align(Alignment.CenterHorizontally)
-        ) { Text("本月") }
 
-        if (inMonth.isEmpty()) {
+        if (days.isEmpty()) {
             EmptyState("本月还没有心情记录", "按小时记下心情后，这里会展示你的情绪分布")
             return@Column
         }
 
-        val days = latestByDay.values
         val avg = days.map { moodOf(it.moodId).score }.average()
+        // 占比最高的心情
+        val topMood = moods.maxByOrNull { m -> days.count { it.moodId == m.id } }
+        val topCount = days.count { it.moodId == topMood!!.id }
 
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            StatCard("记录天数", "${days.size} 天", Modifier.weight(1f))
-            StatCard("平均心情", String.format(Locale.CHINA, "%.1f / 5", avg), Modifier.weight(1f))
-        }
-        Spacer(Modifier.height(18.dp))
-        Card(Modifier.fillMaxWidth()) {
-            Text(
-                "本月共记录 ${inMonth.size} 条心情时段",
-                Modifier.padding(12.dp),
-                style = MaterialTheme.typography.bodyMedium
-            )
-        }
-
-        Spacer(Modifier.height(22.dp))
-        Text("情绪分布（按天）", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        moods.forEach { m ->
-            val count = days.count { it.moodId == m.id }
-            val pct = count.toFloat() / days.size
-            Row(
-                Modifier.fillMaxWidth().padding(top = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("${m.emoji} ${m.label}", Modifier.width(88.dp))
-                LinearProgressIndicator(
-                    pct,
-                    Modifier.weight(1f).height(10.dp).clip(CircleShape),
-                    color = m.color,
-                    trackColor = MaterialTheme.colorScheme.surfaceVariant
-                )
-                Text("  $count (${(pct * 100).toInt()}%)", Modifier.width(74.dp), fontSize = 12.sp)
+        // 主色横幅：一眼看到这个月的概况
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .clip(RoundedCornerShape(24.dp))
+                .background(accent)
+                .padding(20.dp)
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "${topMood!!.emoji} 主要情绪是${topMood.label}",
+                        color = onAccent, fontWeight = FontWeight.Bold, fontSize = 18.sp
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "共记录 ${inMonth.size} 条 · ${days.size} 天",
+                        color = onAccent.copy(alpha = 0.85f), fontSize = 13.sp
+                    )
+                    Text(
+                        "平均 ${String.format(Locale.CHINA, "%.1f", avg)} / 5 分",
+                        color = onAccent.copy(alpha = 0.85f), fontSize = 13.sp
+                    )
+                }
+                // 大号 emoji
+                Text(topMood.emoji, fontSize = 52.sp)
             }
         }
 
-        Spacer(Modifier.height(24.dp))
-        Text("本月心情热力条", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        val map = latestByDay
-        FlowRow(
-            Modifier.padding(top = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
-            verticalArrangement = Arrangement.spacedBy(5.dp)
+        Spacer(Modifier.height(20.dp))
+
+        // —— 情绪分布（用主色调进度条，且右侧显示百分比） ——
+        Text(
+            "情绪分布",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 16.dp)
+        )
+        Spacer(Modifier.height(12.dp))
+        Column(
+            Modifier.padding(horizontal = 16.dp).clip(RoundedCornerShape(20.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            (1..month.lengthOfMonth()).forEach { day ->
-                val e = map[month.atDay(day).toString()]
-                Box(
-                    Modifier.size(18.dp).clip(CircleShape)
-                        .background(
-                            e?.let { moodOf(it.moodId).color } ?: MaterialTheme.colorScheme.surfaceVariant
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
+            moods.forEach { m ->
+                val count = days.count { it.moodId == m.id }
+                val pct = if (days.isEmpty()) 0f else count.toFloat() / days.size
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(m.emoji, fontSize = 22.sp, modifier = Modifier.width(34.dp))
+                    Column(Modifier.weight(1f)) {
+                        Row {
+                            Text(m.label, fontWeight = FontWeight.Medium)
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                "${(pct * 100).toInt()}%",
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Box(
+                            Modifier.fillMaxWidth().height(8.dp).clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                        ) {
+                            Box(
+                                Modifier.fillMaxWidth(pct.coerceIn(0.01f, 1f)).height(8.dp)
+                                    .clip(CircleShape).background(m.color)
+                            )
+                        }
+                    }
                     Text(
-                        day.toString(),
-                        fontSize = 7.sp,
-                        color = if (e == null) MaterialTheme.colorScheme.onSurfaceVariant else Color.White
+                        "${count} 天",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(44.dp)
                     )
                 }
             }
         }
-    }
-}
 
-@Composable
-fun StatCard(label: String, value: String, modifier: Modifier = Modifier) {
-    Card(modifier) {
-        Column(Modifier.padding(16.dp)) {
-            Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(22.dp))
+
+        // —— 心情热力条 ——
+        Text(
+            "本月心情热力条",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 16.dp)
+        )
+        Spacer(Modifier.height(10.dp))
+        FlowRow(
+            Modifier.padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            (1..month.lengthOfMonth()).forEach { day ->
+                val e = latestByDay[month.atDay(day).toString()]
+                val mood = e?.let { moodOf(it.moodId) }
+                val isToday = month.atDay(day) == LocalDate.now()
+                Box(
+                    Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(mood?.color ?: MaterialTheme.colorScheme.surfaceVariant)
+                        .then(
+                            if (isToday) Modifier.border(
+                                2.dp, accent, RoundedCornerShape(12.dp)
+                            ) else Modifier
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            day.toString(),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (mood != null && mood.color.luminance() < .55f) Color.White
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (mood != null) Text(mood.emoji, fontSize = 10.sp)
+                    }
+                }
+            }
         }
+
+        Spacer(Modifier.height(30.dp))
     }
 }
 

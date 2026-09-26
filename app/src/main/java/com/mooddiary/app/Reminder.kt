@@ -158,7 +158,16 @@ object Reminder {
         )
 
         // 自定义布局：5 个表情按钮，点任意一个直接记录
+        // 标题颜色跟随当前主题色
+        val accentArgb = when (SettingsStore(context).current().accentColor) {
+            AccentColor.AMBER -> 0xFFE48600.toInt()
+            AccentColor.BLUE -> 0xFF2B54A8.toInt()
+            AccentColor.GREEN -> 0xFF2E7D5B.toInt()
+            AccentColor.PURPLE -> 0xFF7A4FA3.toInt()
+            AccentColor.PINK -> 0xFFC2185B.toInt()
+        }
         val views = RemoteViews(context.packageName, R.layout.notification_mood_chooser)
+        views.setTextColor(R.id.notification_title, accentArgb)
         views.setTextViewText(
             R.id.notification_title,
             "现在心情怎么样？点一个表情，记录 ${String.format(Locale.CHINA, "%02d:00", hour)} 的心情"
