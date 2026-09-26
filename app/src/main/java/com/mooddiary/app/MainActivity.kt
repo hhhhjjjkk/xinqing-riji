@@ -683,38 +683,20 @@ fun FloatingNavBar(
         // ① 玻璃胶囊本体（纯视觉）
         val scheme = MaterialTheme.colorScheme
         val glassDark = scheme.surface.luminance() < 0.5f
-        val navGlassTop = if (glassDark) {
-            scheme.primary.copy(alpha = 0.18f).compositeOver(scheme.surface)
-        } else {
-            Color.White.copy(alpha = 0.92f).compositeOver(scheme.primary.copy(alpha = 0.10f))
-        }
-        val navGlassBottom = if (glassDark) {
-            scheme.primary.copy(alpha = 0.07f).compositeOver(scheme.surface)
-        } else {
-            Color.White.copy(alpha = 0.68f).compositeOver(scheme.primary.copy(alpha = 0.05f))
-        }
         Box(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(percent = 50))
-                .background(
-                    androidx.compose.ui.graphics.Brush.verticalGradient(
-                        listOf(navGlassTop, navGlassBottom)
-                    )
-                )
-                .background(
-                    androidx.compose.ui.graphics.Brush.verticalGradient(
-                        0.0f to Color.White.copy(alpha = if (glassDark) 0.10f else 0.55f),
-                        0.10f to Color.Transparent
-                    )
-                )
+                // 填充与页面背景同色：不产生任何色块差异，
+                // 只靠描边勾勒轮廓，从而与页面完全融为一体、无分割感
+                .background(scheme.surface, RoundedCornerShape(percent = 50))
                 .border(
                     1.dp,
                     androidx.compose.ui.graphics.Brush.linearGradient(
                         listOf(
-                            Color.White.copy(alpha = if (glassDark) 0.28f else 0.95f),
-                            scheme.primary.copy(alpha = 0.30f),
-                            Color.White.copy(alpha = if (glassDark) 0.10f else 0.45f)
+                            Color.White.copy(alpha = if (glassDark) 0.22f else 0.80f),
+                            scheme.primary.copy(alpha = 0.22f),
+                            Color.White.copy(alpha = if (glassDark) 0.08f else 0.40f)
                         )
                     ),
                     RoundedCornerShape(percent = 50)
@@ -733,49 +715,38 @@ fun FloatingNavBar(
                         val w = pillWPx
                         val h = with(density) { HIGHLIGHT_H.toPx() }
 
-                        val ow = w * 2.4f
-                        val oh = h * 3.2f
+                        // 光环：只比按钮大一圈（约一半范围），且中空——
+                        // 光源中心不填充，只在按钮外缘形成一圈轮廓光，
+                        // 这样照亮的范围小、也不会糊到相邻元素本体上
+                        val strokeW = with(density) { 3.dp.toPx() }
+                        val rw = w + strokeW * 2f
+                        val rh = h + strokeW * 2f
                         drawRoundRect(
                             brush = androidx.compose.ui.graphics.Brush.radialGradient(
                                 colorStops = arrayOf(
-                                    0.00f to accent.copy(alpha = 0.30f),
-                                    0.40f to accent.copy(alpha = 0.13f),
+                                    0.00f to Color.Transparent,
+                                    // 环带：只有很窄的一圈有亮度
+                                    0.42f to Color.Transparent,
+                                    0.62f to accent.copy(alpha = 0.55f),
+                                    0.78f to accent.copy(alpha = 0.22f),
                                     1.00f to Color.Transparent
                                 ),
                                 center = Offset(cx, cy),
-                                radius = ow / 2f
+                                radius = rw / 2f
                             ),
-                            topLeft = Offset(cx - ow / 2f, cy - oh / 2f),
-                            size = Size(ow, oh),
-                            cornerRadius = CornerRadius(oh / 2f)
-                        )
-                        val iw = w * 1.20f
-                        val ih = h * 1.5f
-                        drawRoundRect(
-                            brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                colorStops = arrayOf(
-                                    0.00f to accent.copy(alpha = 0.78f),
-                                    0.60f to accent.copy(alpha = 0.32f),
-                                    1.00f to Color.Transparent
-                                ),
-                                center = Offset(cx, cy),
-                                radius = iw / 2f
-                            ),
-                            topLeft = Offset(cx - iw / 2f, cy - ih / 2f),
-                            size = Size(iw, ih),
-                            cornerRadius = CornerRadius(ih / 2f)
+                            topLeft = Offset(cx - rw / 2f, cy - rh / 2f),
+                            size = Size(rw, rh),
+                            cornerRadius = CornerRadius(rh / 2f)
                         )
                     },
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 items.forEachIndexed { idx, item ->
                     val src = glowIndex
+                    // 只对紧邻的一项描轮廓（0.6），再远的不受影响——
+                    // 避免"照亮其他元素"的观感
                     val litAmount = if (showGlow && src != null) {
-                        when (kotlin.math.abs(idx - src)) {
-                            1 -> 0.75f
-                            2 -> 0.35f
-                            else -> 0f
-                        }
+                        if (kotlin.math.abs(idx - src) == 1) 0.6f else 0f
                     } else 0f
                     NavItem(
                         label = item.first,
@@ -944,39 +915,38 @@ private fun NavItem(
     val wPx = with(density) { HIGHLIGHT_W.toPx() }
     val hPx = with(density) { HIGHLIGHT_H.toPx() }
 
-    // 发光体由整条导航栏统一绘制（见下方 Row 的 drawBehind），
-    // 因为单个导航项只有约 80dp 宽，画不下也照不到旁边的元素。
-    // 这里只负责「被邻光照亮」的着色。
-    Box(
-        modifier.drawBehind {
-            if (lit > 0.01f) {
-                val cx = size.width / 2f
-                val cy = size.height / 2f
-                drawRoundRect(
-                    color = accent.copy(alpha = 0.13f * lit),
-                    topLeft = Offset(cx - wPx / 2f, cy - hPx / 2f),
-                    size = Size(wPx, hPx),
-                    cornerRadius = CornerRadius(hPx / 2f)
-                )
-            }
-        },
-        contentAlignment = Alignment.Center
-    ) {
+    Box(modifier, contentAlignment = Alignment.Center) {
         // 固定尺寸：导航条高度只由它决定（48dp + 内边距），不受光晕影响
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
             modifier = Modifier.size(HIGHLIGHT_W, HIGHLIGHT_H)
         ) {
+            // 只有「当前页」与「正被按住」才用强调色；
+            // 被邻光照亮时保持原色，仅由描边体现受光
             val tint = when {
                 active -> accent
                 glow > 0.01f -> accent
-                lit > 0.01f -> androidx.compose.ui.graphics.lerp(
-                    MaterialTheme.colorScheme.onSurfaceVariant, accent, lit * 0.55f
-                )
                 else -> MaterialTheme.colorScheme.onSurfaceVariant
             }
-            Icon(icon, label, tint = tint, modifier = Modifier.size(24.dp))
+            // 被邻光照亮时：在图标下方叠一个**放大的同款图标**作为轮廓光。
+            // 形状自然跟随每个图标自身（日历就是日历的轮廓、统计就是统计的轮廓），
+            // 且只沿图标外缘透出一圈光，不会照亮文字或其他元素。
+            Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+                if (lit > 0.01f) {
+                    Icon(
+                        icon, null,
+                        tint = accent.copy(alpha = 0.60f * lit),
+                        modifier = Modifier
+                            .size(24.dp)
+                            .graphicsLayer {
+                                scaleX = 1.30f
+                                scaleY = 1.30f
+                            }
+                    )
+                }
+                Icon(icon, label, tint = tint, modifier = Modifier.size(24.dp))
+            }
             Text(
                 label,
                 fontSize = 11.sp,
