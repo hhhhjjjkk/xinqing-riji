@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -83,6 +84,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.LocalTime
@@ -611,16 +613,44 @@ fun FloatingNavBar(
         val slotPx = with(density) { slotW.toPx() }
         val rowPadPx = with(density) { rowPad.toPx() }
 
-        // 椭圆水平位置：连续平滑的补间动画
-        val animatedX by animateDpAsState(
-            targetValue = centerX(activeIndex) - HIGHLIGHT_W / 2,
-            animationSpec = if (scrubbing) {
-                tween(durationMillis = 80)
+        // 椭圆水平位置（dp）。用普通状态 + 手动动画：
+        // - 点击切换 / 松手归位：用 animate() 平滑滑动
+        // - 拖动过程：直接赋值，零延迟跟随手指，因此绝对连贯
+        //
+        // 之前用 animateDpAsState + 80ms tween，拖动时每次跨格动画都重新启动，
+        // 所以看起来一顿一顿的。
+        val scope = rememberCoroutineScope()
+        var pillX by remember { mutableFloatStateOf(0f) }
+        var settleJob by remember { mutableStateOf<Job?>(null) }
+        var firstLayout by remember { mutableStateOf(true) }
+
+        fun pillTarget(i: Int) =
+            with(density) { (centerX(i) - HIGHLIGHT_W / 2).toPx() }
+
+        fun animatePillTo(target: Float) {
+            settleJob?.cancel()
+            settleJob = scope.launch {
+                animate(
+                    initialValue = pillX,
+                    targetValue = target,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioNoBouncy,
+                        stiffness = Spring.StiffnessMediumLow
+                    )
+                ) { value, _ -> pillX = value }
+            }
+        }
+
+        LaunchedEffect(activeIndex, maxWidth) {
+            if (scrubbing) return@LaunchedEffect
+            val target = pillTarget(activeIndex)
+            if (firstLayout) {
+                pillX = target
+                firstLayout = false
             } else {
-                spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
-            },
-            label = "pillX"
-        )
+                animatePillTo(target)
+            }
+        }
 
         // ① 导航栏本体（纯展示）
         Surface(
@@ -672,7 +702,7 @@ fun FloatingNavBar(
             Box(
                 Modifier
                     .align(Alignment.CenterStart)
-                    .offset(x = animatedX, y = 0.dp)
+                    .offset(x = with(density) { pillX.toDp() }, y = 0.dp)
                     .size(HIGHLIGHT_W, HIGHLIGHT_H)
                     .graphicsLayer {
                         scaleX = highlightScale
@@ -687,13 +717,24 @@ fun FloatingNavBar(
                                 scrubIndex = currentSelected
                                 acc = 0f
                                 scrubbing = true
+                                // 打断进行中的归位动画，准备接管
+                                settleJob?.cancel()
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             },
-                            onDragEnd = { scrubbing = false },
-                            onDragCancel = { scrubbing = false },
+                            onDragEnd = {
+                                scrubbing = false
+                                // 松手：平滑吸附到当前所在槽位
+                                animatePillTo(pillTarget(scrubIndex))
+                            },
+                            onDragCancel = {
+                                scrubbing = false
+                                animatePillTo(pillTarget(scrubIndex))
+                            },
                             onDrag = { change, dragAmount ->
                                 change.consume()
                                 if (!scrubbing) return@detectDragGesturesAfterLongPress
+                                // 椭圆直接跟随手指位移：无动画、无吸附，因此完全连贯
+                                pillX += dragAmount.x
                                 acc += dragAmount.x
                                 // 跨过 1/3 格即切换一页，连续拖动可连翻多页
                                 while (acc >= slotPx / 3f && scrubIndex < items.size - 1) {
