@@ -118,6 +118,13 @@ fun SettingsPage(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            SwitchRow(
+                title = "沉浸光感",
+                subtitle = "长按按钮时发光，并照亮旁边元素的轮廓",
+                checked = settings.immersiveGlow,
+                onCheckedChange = { store.setImmersiveGlow(it) }
+            )
         }
 
         // 启动与操作习惯

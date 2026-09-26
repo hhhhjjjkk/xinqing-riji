@@ -64,6 +64,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
@@ -463,22 +464,23 @@ fun MoodDiaryApp(
                 // 长按高光椭圆拖动时用即时切换，避免连续动画互相打断
                 onScrub = { page ->
                     scope.launch { pagerState.scrollToPage(page) }
-                }
+                },
+                showGlow = settings.immersiveGlow
             )
         },
         // 添加按钮回到右下角，但保留胶囊形状
         floatingActionButton = {
             Surface(
                 onClick = { openEdit(LocalDate.now(), LocalTime.now().hour) },
-                shape = RoundedCornerShape(percent = 50),
+                shape = CircleShape,
                 color = MaterialTheme.colorScheme.primary,
                 shadowElevation = 0.dp,
-                modifier = Modifier.size(width = 60.dp, height = HIGHLIGHT_H)
+                modifier = Modifier.size(56.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         Icons.Default.Add, "新增记录",
-                        tint = Color.White, modifier = Modifier.size(26.dp)
+                        tint = Color.White, modifier = Modifier.size(28.dp)
                     )
                 }
             }
@@ -579,13 +581,18 @@ fun FloatingNavBar(
     items: List<Pair<String, androidx.compose.ui.graphics.vector.ImageVector>>,
     selected: Int,
     onSelect: (Int) -> Unit,
-    onScrub: (Int) -> Unit
+    onScrub: (Int) -> Unit,
+    showGlow: Boolean = true
 ) {
     val density = androidx.compose.ui.platform.LocalDensity.current
     val haptic = LocalHapticFeedback.current
 
     var scrubbing by remember { mutableStateOf(false) }
     var scrubIndex by remember { mutableIntStateOf(selected) }
+
+    // 沉浸光感：记录当前被按住的按钮，用于绘制光晕并照亮邻近元素轮廓
+    var glowIndex by remember { mutableStateOf<Int?>(null) }
+    val glowEnabled = showGlow
 
     val currentSelected by rememberUpdatedState(selected)
     val currentOnScrub by rememberUpdatedState(onScrub)
@@ -666,11 +673,15 @@ fun FloatingNavBar(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 items.forEachIndexed { idx, item ->
+                    // 光感：被按住的按钮自身发光；相邻按钮被"照亮"（描出轮廓）
+                    val lit = glowEnabled && glowIndex != null
                     NavItem(
                         label = item.first,
                         icon = item.second,
                         active = idx == activeIndex,
                         accent = accent,
+                        glowing = lit && glowIndex == idx,
+                        illuminated = lit && glowIndex != idx,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -682,10 +693,25 @@ fun FloatingNavBar(
             Modifier
                 .matchParentSize()
                 .pointerInput(items.size) {
-                    detectTapGestures { offset ->
-                        val idx = ((offset.x - rowPadPx) / slotPx)
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val idx = ((down.position.x - rowPadPx) / slotPx)
                             .toInt().coerceIn(0, items.size - 1)
-                        onSelect(idx)
+                        // 按下即点亮光感
+                        if (glowEnabled) glowIndex = idx
+                        var tapped = false
+                        while (true) {
+                            val ev = awaitPointerEvent()
+                            val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!ch.pressed) { tapped = true; break }
+                            val dx = ch.position.x - down.position.x
+                            val dy = ch.position.y - down.position.y
+                            if (dx * dx + dy * dy >
+                                viewConfiguration.touchSlop * viewConfiguration.touchSlop
+                            ) break
+                        }
+                        glowIndex = null          // 抬起/取消即熄灭
+                        if (tapped) onSelect(idx)
                     }
                 }
         )
@@ -715,17 +741,20 @@ fun FloatingNavBar(
                             onDragStart = {
                                 scrubIndex = currentSelected
                                 scrubbing = true
+                                if (glowEnabled) glowIndex = currentSelected
                                 // 打断进行中的归位动画，准备接管
                                 settleJob?.cancel()
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             },
                             onDragEnd = {
                                 scrubbing = false
+                                glowIndex = null
                                 // 松手：平滑吸附到当前所在槽位
                                 animatePillTo(pillTarget(scrubIndex))
                             },
                             onDragCancel = {
                                 scrubbing = false
+                                glowIndex = null
                                 animatePillTo(pillTarget(scrubIndex))
                             },
                             onDrag = { change, dragAmount ->
@@ -775,16 +804,48 @@ private const val HIGHLIGHT_LIFT_SCALE = 1.25f
 private val HIGHLIGHT_W = 66.dp
 private val HIGHLIGHT_H = 48.dp
 
-/** 导航项：纯展示，点击与长按由上层统一处理 */
+/**
+ * 导航项：纯展示，点击与长按由上层统一处理。
+ *
+ * 沉浸光感：
+ * - glowing：正在被按住，自身画一圈柔和光晕
+ * - illuminated：邻近元素，被照亮——只描亮轮廓，不填充
+ */
 @Composable
 private fun NavItem(
     label: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     active: Boolean,
     accent: Color,
+    glowing: Boolean = false,
+    illuminated: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    // 光晕动画：按住时渐亮，松开渐隐
+    val glow by animateFloatAsState(
+        targetValue = if (glowing) 1f else 0f,
+        animationSpec = tween(durationMillis = 180),
+        label = "navGlow"
+    )
+    // 被照亮：轮廓渐显
+    val lit by animateFloatAsState(
+        targetValue = if (illuminated) 1f else 0f,
+        animationSpec = tween(durationMillis = 220),
+        label = "navLit"
+    )
+
     Box(modifier, contentAlignment = Alignment.Center) {
+        // 光晕层：画在按钮下方（先绘制），向外扩散
+        if (glow > 0.01f) {
+            Box(
+                Modifier
+                    .size(HIGHLIGHT_W * (1f + 0.35f * glow), HIGHLIGHT_H * (1f + 0.5f * glow))
+                    .graphicsLayer { alpha = glow }
+                    .blur(18.dp)
+                    .background(accent.copy(alpha = 0.55f), RoundedCornerShape(percent = 50))
+            )
+        }
+
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
@@ -792,14 +853,41 @@ private fun NavItem(
         ) {
             Icon(
                 icon, label,
-                tint = if (active) accent else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(24.dp)
+                tint = when {
+                    active -> accent
+                    glow > 0.5f -> accent          // 被按住时图标也亮起
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier
+                    .size(24.dp)
+                    .graphicsLayer {
+                        // 被照亮：只提亮轮廓感（用轻微放大+透明描边模拟）
+                        alpha = 1f
+                    }
             )
             Text(
                 label,
                 fontSize = 11.sp,
-                color = if (active) accent else MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = if (active) FontWeight.Bold else FontWeight.Normal
+                color = when {
+                    active -> accent
+                    glow > 0.5f -> accent
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                fontWeight = if (active || glow > 0.5f) FontWeight.Bold else FontWeight.Normal
+            )
+        }
+
+        // 被照亮的轮廓：只在边缘描一圈光，不填充
+        if (lit > 0.01f) {
+            Box(
+                Modifier
+                    .size(HIGHLIGHT_W, HIGHLIGHT_H)
+                    .graphicsLayer { alpha = lit * 0.6f }
+                    .border(
+                        width = 1.dp,
+                        color = accent.copy(alpha = 0.7f),
+                        shape = RoundedCornerShape(percent = 50)
+                    )
             )
         }
     }

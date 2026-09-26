@@ -44,6 +44,8 @@ data class AppSettings(
     val startTab: StartTab = StartTab.CALENDAR,
     val calendarShowNote: Boolean = false,  // 日历格子显示备注摘要
     val calendarTapAction: CalendarTapAction = CalendarTapAction.OPEN_DAY_BOARD,
+    /** 长按按钮时的沉浸光感（发光并照亮邻近元素的轮廓） */
+    val immersiveGlow: Boolean = true,
     val reminderEnabled: Boolean = false,
     val quietHoursEnabled: Boolean = false,
     val quietStart: Int = 22,
@@ -91,6 +93,7 @@ class SettingsStore(context: Context) {
         calendarShowNote = prefs.getBoolean(KEY_CAL_NOTE, false),
         calendarTapAction = CalendarTapAction.entries
             .getOrElse(prefs.getInt(KEY_CAL_TAP, 0)) { CalendarTapAction.OPEN_DAY_BOARD },
+        immersiveGlow = prefs.getBoolean(KEY_GLOW, true),
         reminderEnabled = prefs.getBoolean(KEY_REMINDER, false),
         quietHoursEnabled = prefs.getBoolean(KEY_QUIET_ENABLED, false),
         quietStart = prefs.getInt(KEY_QUIET_START, 22),
@@ -109,6 +112,7 @@ class SettingsStore(context: Context) {
     fun setStartTab(tab: StartTab) = commit { putInt(KEY_START_TAB, tab.ordinal) }
     fun setCalendarShowNote(enabled: Boolean) = commit { putBoolean(KEY_CAL_NOTE, enabled) }
     fun setCalendarTapAction(action: CalendarTapAction) = commit { putInt(KEY_CAL_TAP, action.ordinal) }
+    fun setImmersiveGlow(enabled: Boolean) = commit { putBoolean(KEY_GLOW, enabled) }
     fun setReminderEnabled(enabled: Boolean) {
         commit { putBoolean(KEY_REMINDER, enabled) }
         Reminder.setEnabled(appContext, enabled)
@@ -141,6 +145,7 @@ class SettingsStore(context: Context) {
         private const val KEY_START_TAB = "start_tab"
         private const val KEY_CAL_NOTE = "calendar_show_note"
         private const val KEY_CAL_TAP = "calendar_tap_action"
+        private const val KEY_GLOW = "immersive_glow"
     }
 }
 
