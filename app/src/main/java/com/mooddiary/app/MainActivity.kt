@@ -25,6 +25,13 @@ import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.ui.input.pointer.consume
 import androidx.compose.ui.input.pointer.awaitPointerEvent
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.foundation.gestures.drag
+import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -550,14 +557,16 @@ fun MoodDiaryApp(
 /**
  * 悬浮胶囊导航栏（四项等分，无中间按钮）。
  *
- * 交互：
- * - 点击任一项切换页面
- * - 长按选中项的高光椭圆会放大一点，此时左右拖动可连续切换页面，
- *   松手后椭圆恢复原尺寸
+ * 结构：
+ * - 底层 Surface 是导航栏本体，四个槽位等分
+ * - 高光椭圆**独立绘制在导航栏之上**（overlay），不随导航栏裁切，
+ *   因此放大时可以大于导航栏并盖在它上面
  *
- * 长按拖动的手势挂在整个导航栏上而不是单个项上：
- * 否则一旦拖动导致选中项改变，承载手势的那个项就失去选中，手势被打断，
- * 只能拖一格。用 rememberUpdatedState 读取最新选中项即可连续拖动。
+ * 长按交互（只在椭圆上生效）：
+ * - 只有按下点落在椭圆范围内才响应，按导航栏空白处不会有任何反应
+ * - 按住 250ms 未移动 → 椭圆放大并震动反馈，进入拖动态
+ * - 拖动 → 按水平位移切换页面（即时切换，避免动画互相打断）
+ * - 松手 → 椭圆恢复原尺寸
  */
 @Composable
 fun FloatingNavBar(
@@ -567,12 +576,29 @@ fun FloatingNavBar(
     onScrub: (Int) -> Unit
 ) {
     val density = androidx.compose.ui.platform.LocalDensity.current
-    var scrubbing by remember { mutableStateOf(false) }
-    // 拖动过程中被"拎起"的项：初始为按下时的选中项，随拖动移动
-    var scrubIndex by remember { mutableIntStateOf(selected) }
+    val haptic = LocalHapticFeedback.current
+
+    // 每个槽位中心的 x 坐标（相对导航栏），用于定位独立椭圆
+    val slotCenters = remember(items.size) { mutableStateListOf<Float>() }
+    var barWidthPx by remember { mutableFloatStateOf(0f) }
+    var barHeightPx by remember { mutableFloatStateOf(0f) }
 
     val currentSelected by rememberUpdatedState(selected)
     val currentOnScrub by rememberUpdatedState(onScrub)
+
+    // 拖动态：scrubIndex 为被"拎起"的项
+    var scrubbing by remember { mutableStateOf(false) }
+    var scrubIndex by remember { mutableIntStateOf(selected) }
+
+    // 椭圆放大动画
+    val highlightScale by animateFloatAsState(
+        targetValue = if (scrubbing) HIGHLIGHT_LIFT_SCALE else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+        label = "highlightScale"
+    )
+
+    val ellipseW = HIGHLIGHT_W * highlightScale
+    val ellipseH = HIGHLIGHT_H * highlightScale
 
     Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
         Surface(
@@ -589,29 +615,9 @@ fun FloatingNavBar(
                 Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 8.dp, vertical = 6.dp)
-                    // 长按 → 进入拖动模式；拖动 → 按水平位移切换页面；松手 → 复位
-                    .pointerInput(items.size) {
-                        detectDragGesturesAfterLongPress(
-                            onDragStart = {
-                                scrubIndex = currentSelected
-                                scrubbing = true
-                            },
-                            onDragEnd = { scrubbing = false },
-                            onDragCancel = { scrubbing = false },
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-                                if (!scrubbing) return@detectDragGesturesAfterLongPress
-                                val slotPx = (size.width - with(density) { 16.dp.toPx() }) / items.size
-                                if (slotPx <= 0f) return@detectDragGesturesAfterLongPress
-                                // 累积水平位移，跨过半格才换页，避免抖动
-                                val next = (scrubIndex + (dragAmount.x / slotPx).toInt())
-                                    .coerceIn(0, items.size - 1)
-                                if (next != scrubIndex) {
-                                    scrubIndex = next
-                                    currentOnScrub(next)
-                                }
-                            }
-                        )
+                    .onGloballyPositioned { coords ->
+                        barWidthPx = coords.size.width.toFloat()
+                        barHeightPx = coords.size.height.toFloat()
                     },
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -620,17 +626,86 @@ fun FloatingNavBar(
                     NavItem(
                         label = item.first,
                         icon = item.second,
+                        // 拖动时高亮跟随手指所在项；平时跟随当前页
                         selected = if (scrubbing) idx == scrubIndex else idx == selected,
                         accent = accent,
-                        // 长按拖动时，被拎起的那一项放大一点
-                        lifted = scrubbing && idx == scrubIndex,
-                        modifier = Modifier.weight(1f)
+                        // 椭圆由外层 overlay 绘制，这里只留位置与文字
+                        showHighlight = false,
+                        modifier = Modifier
+                            .weight(1f)
+                            .onGloballyPositioned { c ->
+                                val cx = c.positionInParent().x + c.size.width / 2f
+                                if (slotCenters.size <= idx) slotCenters.add(cx) else slotCenters[idx] = cx
+                            }
                     ) { onSelect(idx) }
                 }
             }
         }
+
+        // —— 独立的高光椭圆浮层：绘制在导航栏之上，可超出其边界 ——
+        val activeIndex = if (scrubbing) scrubIndex else selected
+        val accent = MaterialTheme.colorScheme.primary
+        if (slotCenters.size > activeIndex && barWidthPx > 0f) {
+            val cx = slotCenters[activeIndex]
+            val left = with(density) { (cx - ellipseW.toPx() / 2f).toDp() }
+            // 垂直居中于导航栏
+            Box(
+                Modifier
+                    .offset(x = left, y = 0.dp)
+                    .align(Alignment.CenterStart)
+                    .size(width = ellipseW, height = ellipseH)
+                    .clip(RoundedCornerShape(percent = 50))
+                    .background(accent.copy(alpha = 0.16f))
+                    .border(1.5.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(percent = 50))
+                    // 长按判定：只有按在椭圆上才响应
+                    .pointerInput(activeIndex) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            val downPos = down.position
+                            val wPx = with(density) { HIGHLIGHT_W.toPx() }
+                            val hPx = with(density) { HIGHLIGHT_H.toPx() }
+                            // 命中检测：按下点必须落在椭圆范围内（留 8dp 容差）
+                            val inside = downPos.x >= -8f && downPos.x <= wPx + 8f &&
+                                downPos.y >= -8f && downPos.y <= hPx + 8f
+                            if (!inside) return@awaitEachGesture
+
+                            // 等系统长按超时；期间移动过多或抬起则取消
+                            val longPress = awaitLongPressOrCancellation(down.id)
+                            if (longPress == null) return@awaitEachGesture   // 不是长按
+
+                            // 触发长按：椭圆放大 + 震动，进入拖动
+                            scrubIndex = activeIndex
+                            scrubbing = true
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            longPress.consume()
+
+                            // 拖动：按水平位移切换页面（跨半格换一页）
+                            val slotPx = if (items.size > 1 && barWidthPx > 0f) barWidthPx / items.size else 1f
+                            var acc = 0f
+                            val cancelled = drag(down.id) { change ->
+                                change.consume()
+                                acc += change.positionChange().x
+                                while (acc >= slotPx / 2f && scrubIndex < items.size - 1) {
+                                    scrubIndex += 1
+                                    acc -= slotPx
+                                    currentOnScrub(scrubIndex)
+                                }
+                                while (acc <= -slotPx / 2f && scrubIndex > 0) {
+                                    scrubIndex -= 1
+                                    acc += slotPx
+                                    currentOnScrub(scrubIndex)
+                                }
+                            }
+                            scrubbing = false
+                        }
+                    }
+            )
+        }
     }
 }
+
+/** 长按时椭圆放大的倍数 */
+private const val HIGHLIGHT_LIFT_SCALE = 1.25f
 
 /** 选中态高光胶囊的尺寸：四个位置统一 */
 private val HIGHLIGHT_W = 66.dp
@@ -642,24 +717,15 @@ private fun NavItem(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     selected: Boolean,
     accent: Color,
-    lifted: Boolean = false,
+    showHighlight: Boolean = true,
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
-    val bg = if (selected) accent.copy(alpha = 0.14f) else Color.Transparent
-    val border = if (selected) accent.copy(alpha = 0.45f) else Color.Transparent
+    val bg = if (selected && showHighlight) accent.copy(alpha = 0.14f) else Color.Transparent
+    val border = if (selected && showHighlight) accent.copy(alpha = 0.45f) else Color.Transparent
 
-    // 长按拖动时放大一点点；用动画平滑过渡，松手自然回弹
-    val scale by animateFloatAsState(
-        targetValue = if (lifted) 1.12f else 1f,
-        animationSpec = tween(durationMillis = 140),
-        label = "navLift"
-    )
-
-    // 点击热区挂在外层整块（含 weight 分到的全部空间），
-    // 内层只是固定尺寸的视觉胶囊。
-    // 之前点击只绑在 66dp 的胶囊上，点在项与项之间的空隙会被吞掉，
-    // 表现为「点一下没反应，要点两下」。
+    // 点击热区覆盖整个槽位（含 weight 分配的全部空间），
+    // 避免点在项与项之间的空隙被吞掉
     Box(
         modifier
             .clip(RoundedCornerShape(percent = 50))
@@ -670,10 +736,6 @@ private fun NavItem(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
             modifier = Modifier
-                .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                }
                 .size(width = HIGHLIGHT_W, height = HIGHLIGHT_H)
                 .clip(RoundedCornerShape(percent = 50))
                 .background(bg)
