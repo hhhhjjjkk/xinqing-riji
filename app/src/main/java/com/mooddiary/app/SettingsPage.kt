@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.*
@@ -380,11 +381,14 @@ fun SettingsPage(
 private fun hourText(hour: Int) = String.format(Locale.CHINA, "%02d:00", hour)
 
 /**
- * 玻璃拟态面板：半透明底 + 双向细描边（左上受光、右下背光）+ 轻微层次，
- * 营造磨砂玻璃质感。
+ * 玻璃拟态面板。
  *
- * 说明：真正的背景模糊需要 API 31+ 的 RenderEffect，为保证低版本一致可用，
- * 这里用「半透明填充 + 受光描边」模拟磨砂观感，所有版本表现一致。
+ * 关键：面板必须比页面背景**更亮或更暗、且带一点强调色染色**，
+ * 否则同色半透明叠在同色上等于没有效果（上一版就是这样，完全看不出来）。
+ * 这里用「强调色轻染 + 白色高光」制造与背景的差异，
+ * 再配受光描边和顶部反光，形成磨砂玻璃观感。
+ *
+ * 注：真正的背景模糊需 API 31+，此处用渐变与描边模拟，全版本观感一致。
  */
 @Composable
 fun GlassPanel(
@@ -393,28 +397,45 @@ fun GlassPanel(
 ) {
     val scheme = MaterialTheme.colorScheme
     val dark = scheme.surface.luminance() < 0.5f
-    // 玻璃底色：在表面色上叠一点强调色，形成若有若无的染色
-    val glass = scheme.surface.copy(alpha = if (dark) 0.72f else 0.66f)
-    val sheen = if (dark) Color.White.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.55f)
+    val accent = scheme.primary
+
+    // 玻璃主体：强调色轻染 + 白/黑偏移，确保与页面背景有可见差异
+    val glassTop = if (dark) {
+        accent.copy(alpha = 0.16f).compositeOver(scheme.surface)
+    } else {
+        Color.White.copy(alpha = 0.90f).compositeOver(accent.copy(alpha = 0.10f))
+    }
+    val glassBottom = if (dark) {
+        accent.copy(alpha = 0.06f).compositeOver(scheme.surface)
+    } else {
+        Color.White.copy(alpha = 0.62f).compositeOver(accent.copy(alpha = 0.05f))
+    }
 
     Box(
         modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(22.dp))
-            // 受光描边：左上偏亮，模拟光从上方打下来
             .background(
-                androidx.compose.ui.graphics.Brush.linearGradient(
-                    listOf(sheen, Color.Transparent, Color.Transparent)
-                )
+                androidx.compose.ui.graphics.Brush.verticalGradient(
+                    listOf(glassTop, glassBottom)
+                ),
+                RoundedCornerShape(22.dp)
             )
-            .background(glass, RoundedCornerShape(22.dp))
+            // 顶部反光：一条极窄的亮带，模拟玻璃上缘受光
+            .background(
+                androidx.compose.ui.graphics.Brush.verticalGradient(
+                    0.0f to Color.White.copy(alpha = if (dark) 0.10f else 0.55f),
+                    0.06f to Color.Transparent
+                ),
+                RoundedCornerShape(22.dp)
+            )
             .border(
                 1.dp,
                 androidx.compose.ui.graphics.Brush.linearGradient(
                     listOf(
-                        Color.White.copy(alpha = if (dark) 0.22f else 0.85f),
-                        scheme.outlineVariant.copy(alpha = 0.35f),
-                        Color.White.copy(alpha = if (dark) 0.08f else 0.35f)
+                        Color.White.copy(alpha = if (dark) 0.26f else 0.95f),
+                        accent.copy(alpha = 0.28f),
+                        Color.White.copy(alpha = if (dark) 0.10f else 0.45f)
                     )
                 ),
                 RoundedCornerShape(22.dp)

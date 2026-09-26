@@ -64,10 +64,10 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -486,9 +486,29 @@ fun MoodDiaryApp(
             }
         }
     ) { padding ->
+        // 页面背景：在表面色上叠一层极淡的强调色渐变，
+        // 作为玻璃面板的"背后"，否则同色半透明叠同色看不出玻璃感
+        val bgScheme = MaterialTheme.colorScheme
+        val bgDark = bgScheme.surface.luminance() < 0.5f
+        Box(
+            Modifier
+                .padding(padding)
+                .fillMaxSize()
+                .background(
+                    androidx.compose.ui.graphics.Brush.verticalGradient(
+                        listOf(
+                            bgScheme.primary.copy(alpha = if (bgDark) 0.10f else 0.07f)
+                                .compositeOver(bgScheme.surface),
+                            bgScheme.surface,
+                            bgScheme.secondary.copy(alpha = if (bgDark) 0.08f else 0.05f)
+                                .compositeOver(bgScheme.surface)
+                        )
+                    )
+                )
+        ) {
         HorizontalPager(
             state = pagerState,
-            modifier = Modifier.padding(padding).fillMaxSize(),
+            modifier = Modifier.fillMaxSize(),
             verticalAlignment = Alignment.Top
         ) { page ->
             when (page) {
@@ -518,6 +538,7 @@ fun MoodDiaryApp(
                     }
                 )
             }
+        }
         }
     }
 
@@ -659,24 +680,46 @@ fun FloatingNavBar(
         }
 
         // ① 导航栏本体（纯展示）
-        // 玻璃拟态导航条：半透明底 + 受光描边
-        val surfaceLum = MaterialTheme.colorScheme.surface.luminance()
-        val glassDark = surfaceLum < 0.5f
-        Surface(
-            shape = RoundedCornerShape(percent = 50),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = if (glassDark) 0.78f else 0.72f),
-            border = androidx.compose.foundation.BorderStroke(
-                1.dp,
-                androidx.compose.ui.graphics.Brush.linearGradient(
-                    listOf(
-                        Color.White.copy(alpha = if (glassDark) 0.22f else 0.85f),
-                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
-                        Color.White.copy(alpha = if (glassDark) 0.08f else 0.35f)
+        // 玻璃拟态导航条：强调色轻染 + 顶部反光 + 受光描边
+        // （与设置页 GlassPanel 保持同一套观感）
+        val scheme = MaterialTheme.colorScheme
+        val glassDark = scheme.surface.luminance() < 0.5f
+        val navGlassTop = if (glassDark) {
+            scheme.primary.copy(alpha = 0.18f).compositeOver(scheme.surface)
+        } else {
+            Color.White.copy(alpha = 0.92f).compositeOver(scheme.primary.copy(alpha = 0.10f))
+        }
+        val navGlassBottom = if (glassDark) {
+            scheme.primary.copy(alpha = 0.07f).compositeOver(scheme.surface)
+        } else {
+            Color.White.copy(alpha = 0.68f).compositeOver(scheme.primary.copy(alpha = 0.05f))
+        }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(percent = 50))
+                .background(
+                    androidx.compose.ui.graphics.Brush.verticalGradient(
+                        listOf(navGlassTop, navGlassBottom)
                     )
                 )
-            ),
-            tonalElevation = 0.dp,
-            modifier = Modifier.fillMaxWidth()
+                .background(
+                    androidx.compose.ui.graphics.Brush.verticalGradient(
+                        0.0f to Color.White.copy(alpha = if (glassDark) 0.10f else 0.55f),
+                        0.10f to Color.Transparent
+                    )
+                )
+                .border(
+                    1.dp,
+                    androidx.compose.ui.graphics.Brush.linearGradient(
+                        listOf(
+                            Color.White.copy(alpha = if (glassDark) 0.28f else 0.95f),
+                            scheme.primary.copy(alpha = 0.30f),
+                            Color.White.copy(alpha = if (glassDark) 0.10f else 0.45f)
+                        )
+                    ),
+                    RoundedCornerShape(percent = 50)
+                )
         ) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = rowPad, vertical = 6.dp),
@@ -826,13 +869,13 @@ private val HIGHLIGHT_H = 48.dp
 /**
  * 导航项：纯展示，点击与长按由上层统一处理。
  *
- * 沉浸光感（不改变任何元素尺寸，只叠加光）：
- * - glowing：当前被按住的按钮 —— 本体发光（柔和光晕向外扩散）
- * - litAmount：被邻近光源照亮的程度 0..1 —— 只是「被照到一点光」，
- *   图标与文字略微提亮、并描出一圈很淡的受光轮廓
+ * 沉浸光感（纯光效，不改变任何元素尺寸）：
+ * - glowing：被按住的按钮 —— 自身发光
+ * - litAmount：被邻近光源照亮的程度 0..1
  *
- * 之所以不用缩放：放大导航条会破坏布局稳定感，
- * 需求要的是「光」，不是「变大」。
+ * 关键：发光用**径向渐变**实现，不能用 Modifier.blur()。
+ * blur 需要 API 31（Android 12）以上才生效，在 Android 10 等旧版本上是
+ * 静默空操作，光晕会完全消失。径向渐变是纯着色器绘制，全版本可用。
  */
 @Composable
 private fun NavItem(
@@ -844,13 +887,11 @@ private fun NavItem(
     litAmount: Float = 0f,
     modifier: Modifier = Modifier
 ) {
-    // 本体发光强度
     val glow by animateFloatAsState(
         targetValue = if (glowing) 1f else 0f,
         animationSpec = tween(durationMillis = 200),
         label = "navGlow"
     )
-    // 被邻光照亮的程度
     val lit by animateFloatAsState(
         targetValue = litAmount.coerceIn(0f, 1f),
         animationSpec = tween(durationMillis = 260),
@@ -858,33 +899,46 @@ private fun NavItem(
     )
 
     Box(modifier, contentAlignment = Alignment.Center) {
-        // ① 被照亮：一层极淡的受光底色（不是边框、不是放大）
+        // ① 被照亮：极淡的受光底色（不放大、不加边框）
         if (lit > 0.01f) {
             Box(
                 Modifier
                     .size(HIGHLIGHT_W, HIGHLIGHT_H)
                     .graphicsLayer { alpha = lit }
-                    .background(accent.copy(alpha = 0.10f), RoundedCornerShape(percent = 50))
+                    .background(accent.copy(alpha = 0.12f), RoundedCornerShape(percent = 50))
             )
         }
 
-        // ② 自身发光：多层柔光叠加，向外扩散（画在图标之下）
+        // ② 自身发光：外周 + 内层两层径向渐变，自然衰减成柔光
         if (glow > 0.01f) {
-            // 近层：亮而小
+            // 外层：范围大、很淡，负责"照亮周围"
             Box(
                 Modifier
-                    .size(HIGHLIGHT_W * 1.10f, HIGHLIGHT_H * 1.25f)
-                    .graphicsLayer { alpha = glow * 0.85f }
-                    .blur(10.dp)
-                    .background(accent.copy(alpha = 0.70f), RoundedCornerShape(percent = 50))
+                    .size(HIGHLIGHT_W * 2.1f, HIGHLIGHT_H * 2.6f)
+                    .graphicsLayer { alpha = glow * 0.9f }
+                    .background(
+                        androidx.compose.ui.graphics.Brush.radialGradient(
+                            0.00f to accent.copy(alpha = 0.38f),
+                            0.35f to accent.copy(alpha = 0.20f),
+                            0.65f to accent.copy(alpha = 0.07f),
+                            1.00f to Color.Transparent
+                        ),
+                        RoundedCornerShape(percent = 50)
+                    )
             )
-            // 远层：淡而大，形成"照亮周围"的观感
+            // 内层：紧贴按钮的一圈亮光
             Box(
                 Modifier
-                    .size(HIGHLIGHT_W * 1.55f, HIGHLIGHT_H * 2.0f)
-                    .graphicsLayer { alpha = glow * 0.45f }
-                    .blur(26.dp)
-                    .background(accent.copy(alpha = 0.55f), RoundedCornerShape(percent = 50))
+                    .size(HIGHLIGHT_W * 1.18f, HIGHLIGHT_H * 1.32f)
+                    .graphicsLayer { alpha = glow }
+                    .background(
+                        androidx.compose.ui.graphics.Brush.radialGradient(
+                            0.00f to accent.copy(alpha = 0.75f),
+                            0.55f to accent.copy(alpha = 0.38f),
+                            1.00f to Color.Transparent
+                        ),
+                        RoundedCornerShape(percent = 50)
+                    )
             )
         }
 
@@ -893,8 +947,7 @@ private fun NavItem(
             verticalArrangement = Arrangement.Center,
             modifier = Modifier.size(HIGHLIGHT_W, HIGHLIGHT_H)
         ) {
-            // 图标：被照亮时略微提亮（用强调色混一点，而不是直接变强调色）
-            val iconTint = when {
+            val tint = when {
                 active -> accent
                 glow > 0.01f -> accent
                 lit > 0.01f -> androidx.compose.ui.graphics.lerp(
@@ -902,12 +955,11 @@ private fun NavItem(
                 )
                 else -> MaterialTheme.colorScheme.onSurfaceVariant
             }
-            Icon(icon, label, tint = iconTint, modifier = Modifier.size(24.dp))
-
+            Icon(icon, label, tint = tint, modifier = Modifier.size(24.dp))
             Text(
                 label,
                 fontSize = 11.sp,
-                color = iconTint,
+                color = tint,
                 fontWeight = if (active || glow > 0.01f) FontWeight.Bold else FontWeight.Normal
             )
         }
