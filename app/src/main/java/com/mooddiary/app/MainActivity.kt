@@ -23,7 +23,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -610,6 +609,14 @@ fun FloatingNavBar(
         val activeIndex = if (scrubbing) scrubIndex else selected
         val accent = MaterialTheme.colorScheme.primary
 
+        // 椭圆水平位置做补间动画：点按切换时平滑滑过去，而不是瞬移
+        val targetX = centerX(activeIndex) - HIGHLIGHT_W / 2
+        val animatedX by animateDpAsState(
+            targetValue = targetX,
+            animationSpec = tween(durationMillis = if (scrubbing) 90 else 260),
+            label = "pillX"
+        )
+
         // ① 导航栏本体（纯展示，不处理点击）
         Surface(
             shape = RoundedCornerShape(percent = 50),
@@ -640,7 +647,7 @@ fun FloatingNavBar(
         Box(
             Modifier
                 .align(Alignment.CenterStart)
-                .offset(x = centerX(activeIndex) - HIGHLIGHT_W / 2, y = 0.dp)
+                .offset(x = animatedX, y = 0.dp)
                 .size(HIGHLIGHT_W, HIGHLIGHT_H)
                 .graphicsLayer {
                     scaleX = highlightScale
@@ -662,6 +669,16 @@ fun FloatingNavBar(
         fun slotAt(x: Float): Int =
             ((x - rowPadPx) / slotPx).toInt().coerceIn(0, items.size - 1)
 
+        // 用自定义 ViewConfiguration 覆盖长按阈值后再挂手势，
+        // 这样 awaitLongPressOrCancellation 会用 250ms 而不是系统默认 ~500ms
+        val baseViewConfig = androidx.compose.ui.platform.LocalViewConfiguration.current
+        val shortViewConfig = remember(baseViewConfig) {
+            ShortLongPressViewConfiguration(baseViewConfig)
+        }
+
+        androidx.compose.runtime.CompositionLocalProvider(
+            androidx.compose.ui.platform.LocalViewConfiguration provides shortViewConfig
+        ) {
         Box(
             Modifier
                 .matchParentSize()
@@ -692,32 +709,25 @@ fun FloatingNavBar(
                             return@awaitEachGesture
                         }
 
-                        // —— 按在椭圆上：等 250ms 判定长按 ——
-                        var moved = false
-                        var released = false
-                        var confirmed = false
-                        withTimeoutOrNull(250L) {
-                            while (true) {
-                                val ev = awaitPointerEvent()
-                                val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
-                                if (!ch.pressed) { released = true; break }
-                                val dx = ch.position.x - down.position.x
-                                val dy = ch.position.y - down.position.y
-                                if (dx * dx + dy * dy > slop * slop) { moved = true; break }
-                            }
-                        } ?: run { confirmed = true }
-
-                        // 提前抬起 → 当普通点击处理（点的是当前项，等价于无操作，但保持反馈一致）
-                        if (released) { currentOnSelect(slotAt(down.position.x)); return@awaitEachGesture }
-                        // 提前移动 → 放弃，不进入拖动
-                        if (!confirmed) return@awaitEachGesture
+                        // —— 按在椭圆上：等长按 ——
+                        // 必须用 Compose 提供的 awaitLongPressOrCancellation：
+                        // 它在该指针作用域内是安全的。此前用 withTimeoutOrNull
+                        // 包住 awaitPointerEvent，超时取消会让手势状态错乱，
+                        // 长按永远等不到，所以怎么按都进不了拖动。
+                        // 阈值通过 LocalViewConfiguration 调短（见文件末尾 LongPressViewConfiguration）。
+                        val longPress = awaitLongPressOrCancellation(down.id)
+                        if (longPress == null) {
+                            // 长按前抬起或移动过多：按普通点击处理
+                            currentOnSelect(slotAt(down.position.x))
+                            return@awaitEachGesture
+                        }
 
                         // —— 进入拖动态 ——
                         var idx = currentSelected
                         scrubIndex = idx
                         scrubbing = true
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        down.consume()
+                        longPress.consume()
 
                         var acc = 0f
                         drag(down.id) { change ->
@@ -736,7 +746,18 @@ fun FloatingNavBar(
                     }
                 }
         )
+        }
     }
+}
+
+/**
+ * 缩短长按阈值的 ViewConfiguration：系统默认约 500ms，对"长按拖动"偏高，
+ * 这里压到 250ms。其余参数沿用系统值。
+ */
+private class ShortLongPressViewConfiguration(
+    private val base: androidx.compose.ui.platform.ViewConfiguration
+) : androidx.compose.ui.platform.ViewConfiguration by base {
+    override val longPressTimeoutMillis: Long get() = 250L
 }
 
 /** 长按时椭圆放大的倍数 */
