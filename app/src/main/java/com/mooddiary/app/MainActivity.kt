@@ -23,6 +23,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -417,8 +419,29 @@ fun MoodDiaryApp(
             )
         }
     ) { padding ->
-        Box(Modifier.padding(padding).fillMaxSize()) {
-            when (tab) {
+        val pagerState = rememberPagerState(
+            initialPage = tab,
+            initialPageOffsetFraction = 0f,
+            pageCount = { navItems.size }
+        )
+
+        // 底部导航 → 滑动页：点击导航项时翻页
+        LaunchedEffect(tab) {
+            if (pagerState.currentPage != tab) {
+                pagerState.animateScrollToPage(tab)
+            }
+        }
+        // 滑动页 → 底部导航：手势翻页后同步选中项
+        LaunchedEffect(pagerState.currentPage) {
+            if (pagerState.currentPage != tab) tab = pagerState.currentPage
+        }
+
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.padding(padding).fillMaxSize(),
+            verticalAlignment = Alignment.Top
+        ) { page ->
+            when (page) {
                 0 -> CalendarPage(
                     month, entries,
                     weekStart = settings.weekStart,
@@ -565,15 +588,16 @@ private fun NavItem(
     val bg = if (selected) accent.copy(alpha = 0.14f) else Color.Transparent
     val border = if (selected) accent.copy(alpha = 0.45f) else Color.Transparent
 
+    // 高光底固定尺寸：不随文字/内容伸缩，四个位置完全一致
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
         modifier = Modifier
-            .widthIn(min = 64.dp)
+            .size(width = 66.dp, height = 48.dp)
             .clip(RoundedCornerShape(percent = 50))
             .background(bg)
             .border(1.dp, border, RoundedCornerShape(percent = 50))
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 4.dp)
     ) {
         Icon(icon, label, tint = if (selected) accent else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(24.dp))
