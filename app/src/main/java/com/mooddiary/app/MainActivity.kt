@@ -446,6 +446,8 @@ fun MoodDiaryApp(
     var pendingPage by remember { mutableIntStateOf(startTab) }
 
     Scaffold(
+        // 整页统一用 surface，顶栏底栏内容区同色，不产生任何交界色差
+        containerColor = MaterialTheme.colorScheme.surface,
         topBar = {
             CenterAlignedTopAppBar(
                 title = { Text("心情日记", fontWeight = FontWeight.Bold) },
@@ -488,29 +490,15 @@ fun MoodDiaryApp(
             }
         }
     ) { padding ->
-        // 页面背景：在表面色上叠一层极淡的强调色渐变，
-        // 作为玻璃面板的"背后"，否则同色半透明叠同色看不出玻璃感
-        val bgScheme = MaterialTheme.colorScheme
-        val bgDark = bgScheme.surface.luminance() < 0.5f
-        Box(
-            Modifier
-                .padding(padding)
-                .fillMaxSize()
-                .background(
-                    androidx.compose.ui.graphics.Brush.verticalGradient(
-                        listOf(
-                            bgScheme.primary.copy(alpha = if (bgDark) 0.10f else 0.07f)
-                                .compositeOver(bgScheme.surface),
-                            bgScheme.surface,
-                            bgScheme.secondary.copy(alpha = if (bgDark) 0.08f else 0.05f)
-                                .compositeOver(bgScheme.surface)
-                        )
-                    )
-                )
-        ) {
+        // 统一使用 surface 作为整页背景，与顶部栏/底部栏完全同色。
+        // 之前这里单独铺了一层强调色渐变，而顶栏底栏没有，
+        // 交界处就有色差 —— 这就是"割裂感"的来源，现已移除。
         HorizontalPager(
             state = pagerState,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .padding(padding)
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.surface),
             verticalAlignment = Alignment.Top
         ) { page ->
             when (page) {
@@ -540,7 +528,6 @@ fun MoodDiaryApp(
                     }
                 )
             }
-        }
         }
     }
 
@@ -616,6 +603,12 @@ fun FloatingNavBar(
     var scrubbing by remember { mutableStateOf(false) }
     var scrubIndex by remember { mutableIntStateOf(selected) }
     var glowIndex by remember { mutableStateOf<Int?>(null) }
+    // 光源强度：按住时点亮，松开渐隐（用于椭圆光晕）
+    val glowStrength by animateFloatAsState(
+        targetValue = if (showGlow && glowIndex != null) 1f else 0f,
+        animationSpec = tween(durationMillis = 220),
+        label = "glowStrength"
+    )
 
     val currentSelected by rememberUpdatedState(selected)
     val currentOnSelect by rememberUpdatedState(onSelect)
@@ -705,56 +698,19 @@ fun FloatingNavBar(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = rowPad, vertical = 6.dp)
-                    .drawBehind {
-                        // 光晕由整条导航栏绘制：横向光才能洒到邻近项目上
-                        val src = glowIndex
-                        if (!showGlow || src == null) return@drawBehind
-                        val cx = with(density) { centerX(src).toPx() }
-                        val cy = size.height / 2f
-                        val w = pillWPx
-                        val h = with(density) { HIGHLIGHT_H.toPx() }
-
-                        // 光环：只比按钮大一圈（约一半范围），且中空——
-                        // 光源中心不填充，只在按钮外缘形成一圈轮廓光，
-                        // 这样照亮的范围小、也不会糊到相邻元素本体上
-                        val strokeW = with(density) { 3.dp.toPx() }
-                        val rw = w + strokeW * 2f
-                        val rh = h + strokeW * 2f
-                        drawRoundRect(
-                            brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                colorStops = arrayOf(
-                                    0.00f to Color.Transparent,
-                                    // 环带：只有很窄的一圈有亮度
-                                    0.42f to Color.Transparent,
-                                    0.62f to accent.copy(alpha = 0.55f),
-                                    0.78f to accent.copy(alpha = 0.22f),
-                                    1.00f to Color.Transparent
-                                ),
-                                center = Offset(cx, cy),
-                                radius = rw / 2f
-                            ),
-                            topLeft = Offset(cx - rw / 2f, cy - rh / 2f),
-                            size = Size(rw, rh),
-                            cornerRadius = CornerRadius(rh / 2f)
-                        )
-                    },
+                    .padding(horizontal = rowPad, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 items.forEachIndexed { idx, item ->
                     val src = glowIndex
-                    // 只对紧邻的一项描轮廓（0.6），再远的不受影响——
-                    // 避免"照亮其他元素"的观感
-                    val litAmount = if (showGlow && src != null) {
-                        if (kotlin.math.abs(idx - src) == 1) 0.6f else 0f
-                    } else 0f
+                    // 相邻项不做任何自身发光/描边处理：
+                    // 照亮效果完全来自椭圆（光源）向外扩散的光晕，
+                    // 光自然落在旁边的图标上，而不是让它们各自发光。
                     NavItem(
                         label = item.first,
                         icon = item.second,
                         active = idx == activeIndex,
                         accent = accent,
-                        glowing = showGlow && src == idx,
-                        litAmount = litAmount,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -842,12 +798,41 @@ fun FloatingNavBar(
             )
         }
 
-        // ③ 高光椭圆：纯视觉，不带手势（手势在②中统一处理）
+        // ③ 高光椭圆：光源本体（纯视觉，不带手势；手势在②统一处理）
+        //
+        // 发光画在椭圆**自己的坐标系**里，因此光晕与椭圆天然对齐，
+        // 不会像此前画在 Row 上那样因坐标系不同而错位。
+        // 光从椭圆向外扩散、照亮周围元素，而不是让周围元素各自发光。
         Box(
             Modifier
                 .align(Alignment.CenterStart)
                 .offset(x = with(density) { pillX.toDp() }, y = 0.dp)
                 .size(HIGHLIGHT_W, HIGHLIGHT_H)
+                .drawBehind {
+                    val g = glowStrength
+                    if (g <= 0.01f) return@drawBehind
+                    val cx = size.width / 2f
+                    val cy = size.height / 2f
+                    // 向外扩散的光晕：中心最亮，向外平滑衰减。
+                    // 绘制半径约为椭圆的一半外扩，因此只照亮紧邻区域。
+                    val rw = size.width * 1.9f
+                    val rh = size.height * 2.4f
+                    drawRoundRect(
+                        brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                            colorStops = arrayOf(
+                                0.00f to accent.copy(alpha = 0.42f * g),
+                                0.35f to accent.copy(alpha = 0.24f * g),
+                                0.62f to accent.copy(alpha = 0.10f * g),
+                                1.00f to Color.Transparent
+                            ),
+                            center = Offset(cx, cy),
+                            radius = rw / 2f
+                        ),
+                        topLeft = Offset(cx - rw / 2f, cy - rh / 2f),
+                        size = Size(rw, rh),
+                        cornerRadius = CornerRadius(rh / 2f)
+                    )
+                }
                 .graphicsLayer {
                     scaleX = highlightScale
                     scaleY = highlightScale
@@ -877,18 +862,11 @@ private class ShortLongPressViewConfiguration(
 }
 
 /**
- * 导航项：纯展示，点击与长按由上层统一处理。
+ * 导航项：纯展示。
  *
- * 沉浸光感（Android 7+ 全兼容，且不改变任何布局）：
- *
- * 关键点一：光晕用 **drawBehind + 径向渐变**绘制。
- * - 不用 Modifier.blur()：它需要 Android 12+，在 Android 10 上是静默空操作。
- * - 不用「大尺寸 Box 叠加」：那样的子元素会参与布局测量，
- *   把导航条从 60dp 撑到 130dp 以上，既破坏布局，
- *   又让椭圆（48dp）居中在变高的容器里，手指按不到它，拖动失效。
- *   drawBehind 只绘制、不参与测量，导航条尺寸完全不受影响。
- *
- * 关键点二：发光是纯光效，不缩放任何元素。
+ * 不参与任何发光绘制——光效由导航栏的高光椭圆（光源）向外扩散实现，
+ * 这样受光方向、范围都以椭圆为唯一基准，不会出现各元素各自发光、
+ * 或光晕与椭圆错位的问题。
  */
 @Composable
 private fun NavItem(
@@ -896,62 +874,24 @@ private fun NavItem(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     active: Boolean,
     accent: Color,
-    glowing: Boolean = false,
-    litAmount: Float = 0f,
     modifier: Modifier = Modifier
 ) {
-    val glow by animateFloatAsState(
-        targetValue = if (glowing) 1f else 0f,
-        animationSpec = tween(durationMillis = 200),
-        label = "navGlow"
-    )
-    val lit by animateFloatAsState(
-        targetValue = litAmount.coerceIn(0f, 1f),
-        animationSpec = tween(durationMillis = 260),
-        label = "navLit"
-    )
-
-    val density = androidx.compose.ui.platform.LocalDensity.current
-    val wPx = with(density) { HIGHLIGHT_W.toPx() }
-    val hPx = with(density) { HIGHLIGHT_H.toPx() }
-
     Box(modifier, contentAlignment = Alignment.Center) {
-        // 固定尺寸：导航条高度只由它决定（48dp + 内边距），不受光晕影响
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
             modifier = Modifier.size(HIGHLIGHT_W, HIGHLIGHT_H)
         ) {
-            // 只有「当前页」与「正被按住」才用强调色；
-            // 被邻光照亮时保持原色，仅由描边体现受光
-            val tint = when {
-                active -> accent
-                glow > 0.01f -> accent
-                else -> MaterialTheme.colorScheme.onSurfaceVariant
-            }
-            // 被邻光照亮时：在图标下方叠一个**放大的同款图标**作为轮廓光。
-            // 形状自然跟随每个图标自身（日历就是日历的轮廓、统计就是统计的轮廓），
-            // 且只沿图标外缘透出一圈光，不会照亮文字或其他元素。
-            Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
-                if (lit > 0.01f) {
-                    Icon(
-                        icon, null,
-                        tint = accent.copy(alpha = 0.60f * lit),
-                        modifier = Modifier
-                            .size(24.dp)
-                            .graphicsLayer {
-                                scaleX = 1.30f
-                                scaleY = 1.30f
-                            }
-                    )
-                }
-                Icon(icon, label, tint = tint, modifier = Modifier.size(24.dp))
-            }
+            Icon(
+                icon, label,
+                tint = if (active) accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(24.dp)
+            )
             Text(
                 label,
                 fontSize = 11.sp,
-                color = tint,
-                fontWeight = if (active || glow > 0.01f) FontWeight.Bold else FontWeight.Normal
+                color = if (active) accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = if (active) FontWeight.Bold else FontWeight.Normal
             )
         }
     }
