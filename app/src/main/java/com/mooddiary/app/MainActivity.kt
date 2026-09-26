@@ -91,6 +91,7 @@ import java.time.LocalTime
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /** 备注长度上限，防止超长文本整段进内存与数据库 */
 const val MAX_NOTE_LENGTH = 500
@@ -585,8 +586,6 @@ fun FloatingNavBar(
 
     var scrubbing by remember { mutableStateOf(false) }
     var scrubIndex by remember { mutableIntStateOf(selected) }
-    // 拖动累计位移（跨格换页用）：每次开始拖动时复位
-    var acc by remember { mutableFloatStateOf(0f) }
 
     val currentSelected by rememberUpdatedState(selected)
     val currentOnScrub by rememberUpdatedState(onScrub)
@@ -715,7 +714,6 @@ fun FloatingNavBar(
                         detectDragGesturesAfterLongPress(
                             onDragStart = {
                                 scrubIndex = currentSelected
-                                acc = 0f
                                 scrubbing = true
                                 // 打断进行中的归位动画，准备接管
                                 settleJob?.cancel()
@@ -733,17 +731,24 @@ fun FloatingNavBar(
                             onDrag = { change, dragAmount ->
                                 change.consume()
                                 if (!scrubbing) return@detectDragGesturesAfterLongPress
-                                // 椭圆直接跟随手指位移：无动画、无吸附，因此完全连贯
-                                pillX += dragAmount.x
-                                acc += dragAmount.x
-                                // 跨过 1/3 格即切换一页，连续拖动可连翻多页
-                                while (acc >= slotPx / 3f && scrubIndex < items.size - 1) {
-                                    scrubIndex += 1; acc -= slotPx
-                                    currentOnScrub(scrubIndex)
-                                }
-                                while (acc <= -slotPx / 3f && scrubIndex > 0) {
-                                    scrubIndex -= 1; acc += slotPx
-                                    currentOnScrub(scrubIndex)
+
+                                // ① 连续跟手，并夹紧在首尾槽位之间，不会滑出导航栏
+                                val minX = pillTarget(0)
+                                val maxX = pillTarget(items.size - 1)
+                                pillX = (pillX + dragAmount.x).coerceIn(minX, maxX)
+
+                                // ② 由椭圆的连续位置直接反推目标槽位。
+                                // 之前用「阈值累加」的写法有 bug：跨一格只需要
+                                // slotPx/3，却把 acc 减掉一整格 slotPx，acc 立刻变成
+                                // 大负数，紧接着触发反向循环又退回来，于是来回横跳、
+                                // 永远拖不到最后一格。改用位置反推后天然单调。
+                                val half = with(density) { HIGHLIGHT_W.toPx() } / 2f
+                                val idx = ((pillX + half - rowPadPx - slotPx / 2f) / slotPx)
+                                    .roundToInt()
+                                    .coerceIn(0, items.size - 1)
+                                if (idx != scrubIndex) {
+                                    scrubIndex = idx
+                                    currentOnScrub(idx)
                                 }
                             }
                         )
