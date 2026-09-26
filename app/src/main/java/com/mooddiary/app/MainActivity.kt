@@ -14,6 +14,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -425,7 +430,7 @@ fun MoodDiaryApp(
                 actions = { if (pagerState.currentPage != 3) ReminderToggle(store) }
             )
         },
-        // 悬浮胶囊导航：不贴边、圆角、中间是大号主操作按钮（参考常见社区类 App）
+        // 悬浮胶囊导航：不贴边、圆角、四项等分
         bottomBar = {
             FloatingNavBar(
                 items = navItems,
@@ -433,13 +438,31 @@ fun MoodDiaryApp(
                 onSelect = { page ->
                     if (page != pendingPage || !pagerState.isScrollInProgress) {
                         pendingPage = page
-                        scope.launch {
-                            pagerState.animateScrollToPage(page)
-                        }
+                        scope.launch { pagerState.animateScrollToPage(page) }
                     }
                 },
-                onAdd = { openEdit(LocalDate.now(), LocalTime.now().hour) }
+                // 长按高光椭圆拖动时用即时切换，避免连续动画互相打断
+                onScrub = { page ->
+                    scope.launch { pagerState.scrollToPage(page) }
+                }
             )
+        },
+        // 添加按钮回到右下角，但保留胶囊形状
+        floatingActionButton = {
+            Surface(
+                onClick = { openEdit(LocalDate.now(), LocalTime.now().hour) },
+                shape = RoundedCornerShape(percent = 50),
+                color = MaterialTheme.colorScheme.primary,
+                shadowElevation = 8.dp,
+                modifier = Modifier.size(width = 60.dp, height = HIGHLIGHT_H)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.Default.Add, "新增记录",
+                        tint = Color.White, modifier = Modifier.size(26.dp)
+                    )
+                }
+            }
         }
     ) { padding ->
         HorizontalPager(
@@ -518,18 +541,32 @@ fun MoodDiaryApp(
 }
 
 /**
- * 悬浮胶囊导航栏。
+ * 悬浮胶囊导航栏（四项等分，无中间按钮）。
  *
- * 布局：每个导航项占相同的剩余宽度（weight），内部高光胶囊固定尺寸，
- * 因此四个位置的选中态视觉完全一致；主操作按钮固定宽度居中。
+ * 交互：
+ * - 点击任一项切换页面
+ * - 长按选中项的高光椭圆会放大一点，此时左右拖动可连续切换页面，
+ *   松手后椭圆恢复原尺寸
+ *
+ * 长按拖动的手势挂在整个导航栏上而不是单个项上：
+ * 否则一旦拖动导致选中项改变，承载手势的那个项就失去选中，手势被打断，
+ * 只能拖一格。用 rememberUpdatedState 读取最新选中项即可连续拖动。
  */
 @Composable
 fun FloatingNavBar(
     items: List<Pair<String, androidx.compose.ui.graphics.vector.ImageVector>>,
     selected: Int,
     onSelect: (Int) -> Unit,
-    onAdd: () -> Unit
+    onScrub: (Int) -> Unit
 ) {
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    var scrubbing by remember { mutableStateOf(false) }
+    // 拖动过程中被"拎起"的项：初始为按下时的选中项，随拖动移动
+    var scrubIndex by remember { mutableIntStateOf(selected) }
+
+    val currentSelected by rememberUpdatedState(selected)
+    val currentOnScrub by rememberUpdatedState(onScrub)
+
     Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
         Surface(
             shape = RoundedCornerShape(percent = 50),
@@ -542,39 +579,46 @@ fun FloatingNavBar(
             modifier = Modifier.fillMaxWidth()
         ) {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    // 长按 → 进入拖动模式；拖动 → 按水平位移切换页面；松手 → 复位
+                    .pointerInput(items.size) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = {
+                                scrubIndex = currentSelected
+                                scrubbing = true
+                            },
+                            onDragEnd = { scrubbing = false },
+                            onDragCancel = { scrubbing = false },
+                            onDrag = { change, dragAmount ->
+                                change.consume()
+                                if (!scrubbing) return@detectDragGesturesAfterLongPress
+                                val slotPx = (size.width - with(density) { 16.dp.toPx() }) / items.size
+                                if (slotPx <= 0f) return@detectDragGesturesAfterLongPress
+                                // 累积水平位移，跨过半格才换页，避免抖动
+                                val next = (scrubIndex + (dragAmount.x / slotPx).toInt())
+                                    .coerceIn(0, items.size - 1)
+                                if (next != scrubIndex) {
+                                    scrubIndex = next
+                                    currentOnScrub(next)
+                                }
+                            }
+                        )
+                    },
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 val accent = MaterialTheme.colorScheme.primary
-
-                items.take(2).forEachIndexed { idx, item ->
+                items.forEachIndexed { idx, item ->
                     NavItem(
-                        label = item.first, icon = item.second,
-                        selected = selected == idx, accent = accent,
+                        label = item.first,
+                        icon = item.second,
+                        selected = if (scrubbing) idx == scrubIndex else idx == selected,
+                        accent = accent,
+                        // 长按拖动时，被拎起的那一项放大一点
+                        lifted = scrubbing && idx == scrubIndex,
                         modifier = Modifier.weight(1f)
                     ) { onSelect(idx) }
-                }
-
-                // 主操作按钮：固定尺寸，与高光胶囊等高
-                Box(
-                    Modifier
-                        .padding(horizontal = 4.dp)
-                        .size(width = 60.dp, height = HIGHLIGHT_H)
-                        .clip(RoundedCornerShape(percent = 50))
-                        .background(accent)
-                        .clickable(onClick = onAdd),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(Icons.Default.Add, "新增记录", tint = Color.White, modifier = Modifier.size(24.dp))
-                }
-
-                items.drop(2).forEachIndexed { idx, item ->
-                    val realIdx = idx + 2
-                    NavItem(
-                        label = item.first, icon = item.second,
-                        selected = selected == realIdx, accent = accent,
-                        modifier = Modifier.weight(1f)
-                    ) { onSelect(realIdx) }
                 }
             }
         }
@@ -591,11 +635,19 @@ private fun NavItem(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     selected: Boolean,
     accent: Color,
+    lifted: Boolean = false,
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     val bg = if (selected) accent.copy(alpha = 0.14f) else Color.Transparent
     val border = if (selected) accent.copy(alpha = 0.45f) else Color.Transparent
+
+    // 长按拖动时放大一点点；用动画平滑过渡，松手自然回弹
+    val scale by animateFloatAsState(
+        targetValue = if (lifted) 1.12f else 1f,
+        animationSpec = tween(durationMillis = 140),
+        label = "navLift"
+    )
 
     // 点击热区挂在外层整块（含 weight 分到的全部空间），
     // 内层只是固定尺寸的视觉胶囊。
@@ -611,6 +663,10 @@ private fun NavItem(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
             modifier = Modifier
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                }
                 .size(width = HIGHLIGHT_W, height = HIGHLIGHT_H)
                 .clip(RoundedCornerShape(percent = 50))
                 .background(bg)
