@@ -26,6 +26,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.awaitPointerEvent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
@@ -33,7 +34,6 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.foundation.gestures.drag
-import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -652,10 +652,6 @@ fun FloatingNavBar(
         val hPx = with(density) { HIGHLIGHT_H.toPx() }
         val slotPx = with(density) { slotW.toPx() }
         val tolPx = with(density) { 8.dp.toPx() }
-        val containerH = constraints.maxHeight.let {
-            if (it == androidx.compose.ui.unit.Constraints.Infinity) hPx + with(density) { 12.dp.toPx() }
-            else it.toFloat()
-        }
 
         Box(
             Modifier
@@ -666,22 +662,36 @@ fun FloatingNavBar(
                         // 命中检测：必须按在当前高光椭圆范围内
                         val cx = with(density) { centerX(currentSelected).toPx() }
                         val left = cx - wPx / 2f
-                        val top = (containerH - hPx) / 2f
+                        // 椭圆垂直居中于导航栏，其顶边恒为 Row 的垂直内边距(6dp)
+                        val top = with(density) { 6.dp.toPx() }
                         val inside = down.position.x >= left - tolPx &&
                             down.position.x <= left + wPx + tolPx &&
                             down.position.y >= top - tolPx &&
                             down.position.y <= top + hPx + tolPx
                         if (!inside) return@awaitEachGesture   // 按在空白处：不处理
 
-                        val longPress = awaitLongPressOrCancellation(down.id)
-                        if (longPress == null) return@awaitEachGesture  // 不是长按
+                        // 自定义长按阈值：系统默认约 500ms，对"长按拖动"这种
+                        // 高频交互太慢，这里用 250ms。
+                        // 期间若抬起或移动超过 slop，则视为普通点击/滑动，不进入拖动。
+                        var confirmed = false
+                        withTimeoutOrNull(250L) {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!change.pressed) break
+                                val dx = change.position.x - down.position.x
+                                val dy = change.position.y - down.position.y
+                                if (dx * dx + dy * dy > viewConfiguration.touchSlop * viewConfiguration.touchSlop) break
+                            }
+                        } ?: run { confirmed = true }
+                        if (!confirmed) return@awaitEachGesture
 
                         // 进入拖动态
                         var idx = currentSelected
                         scrubIndex = idx
                         scrubbing = true
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        longPress.consume()
+                        down.consume()
 
                         // 拖动：跨半格切换一页
                         var acc = 0f
