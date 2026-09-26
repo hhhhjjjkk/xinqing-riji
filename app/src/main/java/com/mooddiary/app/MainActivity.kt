@@ -513,7 +513,9 @@ fun MoodDiaryApp(
 
 /**
  * 悬浮胶囊导航栏。
- * 选中项有一个淡强调色的椭圆高亮底（带描边），中间是药丸形主操作按钮。
+ *
+ * 布局：每个导航项占相同的剩余宽度（weight），内部高光胶囊固定尺寸，
+ * 因此四个位置的选中态视觉完全一致；主操作按钮固定宽度居中。
  */
 @Composable
 fun FloatingNavBar(
@@ -535,25 +537,23 @@ fun FloatingNavBar(
         ) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 val accent = MaterialTheme.colorScheme.primary
 
-                // 左侧两项
                 items.take(2).forEachIndexed { idx, item ->
                     NavItem(
                         label = item.first, icon = item.second,
-                        selected = selected == idx,
-                        accent = accent
+                        selected = selected == idx, accent = accent,
+                        modifier = Modifier.weight(1f)
                     ) { onSelect(idx) }
                 }
 
-                // 中间主操作按钮：药丸形，略高于其他项
+                // 主操作按钮：固定尺寸，与高光胶囊等高
                 Box(
                     Modifier
-                        .padding(horizontal = 6.dp)
-                        .size(width = 64.dp, height = 46.dp)
+                        .padding(horizontal = 4.dp)
+                        .size(width = 60.dp, height = HIGHLIGHT_H)
                         .clip(RoundedCornerShape(percent = 50))
                         .background(accent)
                         .clickable(onClick = onAdd),
@@ -562,13 +562,12 @@ fun FloatingNavBar(
                     Icon(Icons.Default.Add, "新增记录", tint = Color.White, modifier = Modifier.size(24.dp))
                 }
 
-                // 右侧两项
                 items.drop(2).forEachIndexed { idx, item ->
                     val realIdx = idx + 2
                     NavItem(
                         label = item.first, icon = item.second,
-                        selected = selected == realIdx,
-                        accent = accent
+                        selected = selected == realIdx, accent = accent,
+                        modifier = Modifier.weight(1f)
                     ) { onSelect(realIdx) }
                 }
             }
@@ -576,37 +575,46 @@ fun FloatingNavBar(
     }
 }
 
+/** 选中态高光胶囊的尺寸：四个位置统一 */
+private val HIGHLIGHT_W = 66.dp
+private val HIGHLIGHT_H = 48.dp
+
 @Composable
 private fun NavItem(
     label: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     selected: Boolean,
     accent: Color,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
-    // 选中态：淡强调色椭圆底 + 描边
     val bg = if (selected) accent.copy(alpha = 0.14f) else Color.Transparent
     val border = if (selected) accent.copy(alpha = 0.45f) else Color.Transparent
 
-    // 高光底固定尺寸：不随文字/内容伸缩，四个位置完全一致
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-        modifier = Modifier
-            .size(width = 66.dp, height = 48.dp)
-            .clip(RoundedCornerShape(percent = 50))
-            .background(bg)
-            .border(1.dp, border, RoundedCornerShape(percent = 50))
-            .clickable(onClick = onClick)
-    ) {
-        Icon(icon, label, tint = if (selected) accent else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(24.dp))
-        Text(
-            label,
-            fontSize = 11.sp,
-            color = if (selected) accent else MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
-        )
+    // 外层按 weight 均分空间，内层高光胶囊固定尺寸 → 布局统一
+    Box(modifier, contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier
+                .size(width = HIGHLIGHT_W, height = HIGHLIGHT_H)
+                .clip(RoundedCornerShape(percent = 50))
+                .background(bg)
+                .border(1.dp, border, RoundedCornerShape(percent = 50))
+                .clickable(onClick = onClick)
+        ) {
+            Icon(
+                icon, label,
+                tint = if (selected) accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(24.dp)
+            )
+            Text(
+                label,
+                fontSize = 11.sp,
+                color = if (selected) accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+            )
+        }
     }
 }
 
