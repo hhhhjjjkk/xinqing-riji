@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -26,6 +27,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.util.Locale
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SettingsPage(
     store: SettingsStore,
@@ -61,7 +63,10 @@ fun SettingsPage(
         // 外观
         SettingsSection("外观") {
             SettingLabel("主题模式")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 ThemeMode.entries.forEach { mode ->
                     FilterChip(
                         selected = settings.themeMode == mode,
@@ -83,7 +88,10 @@ fun SettingsPage(
         // 个性化：主题色 / 动态取色
         SettingsSection("个性化") {
             SettingLabel("主题色")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 AccentColor.entries.forEach { c ->
                     FilterChip(
                         selected = settings.accentColor == c,
@@ -115,7 +123,10 @@ fun SettingsPage(
         // 启动与操作习惯
         SettingsSection("启动与操作") {
             SettingLabel("启动时打开")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 StartTab.entries.forEach { t ->
                     FilterChip(
                         selected = settings.startTab == t,
@@ -129,7 +140,10 @@ fun SettingsPage(
             }
             Spacer(Modifier.height(12.dp))
             SettingLabel("点日历某天时")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 FilterChip(
                     selected = settings.calendarTapAction == CalendarTapAction.OPEN_DAY_BOARD,
                     onClick = { store.setCalendarTapAction(CalendarTapAction.OPEN_DAY_BOARD) },
@@ -267,7 +281,10 @@ fun SettingsPage(
             )
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
             SettingLabel("每周起始日")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 FilterChip(
                     selected = settings.weekStart == WeekStart.SUNDAY,
                     onClick = { store.setWeekStart(WeekStart.SUNDAY); android.widget.Toast.makeText(context, "已设为周日起始", android.widget.Toast.LENGTH_SHORT).show() },
