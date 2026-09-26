@@ -888,6 +888,23 @@ fun FloatingNavBar(
     }
 }
 
+/** 长按时椭圆放大的倍数 */
+private const val HIGHLIGHT_LIFT_SCALE = 1.25f
+
+/** 选中态高光椭圆的尺寸：四个位置统一 */
+private val HIGHLIGHT_W = 66.dp
+private val HIGHLIGHT_H = 48.dp
+
+/**
+ * 缩短长按阈值的 ViewConfiguration：系统默认约 500ms，对「长按拖动」偏高，
+ * 这里压到 250ms。其余参数沿用系统值。
+ */
+private class ShortLongPressViewConfiguration(
+    private val base: androidx.compose.ui.platform.ViewConfiguration
+) : androidx.compose.ui.platform.ViewConfiguration by base {
+    override val longPressTimeoutMillis: Long get() = 250L
+}
+
 /**
  * 导航项：纯展示，点击与长按由上层统一处理。
  *
