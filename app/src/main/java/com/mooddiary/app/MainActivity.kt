@@ -22,7 +22,6 @@ import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -588,17 +587,20 @@ fun MoodDiaryApp(
 /**
  * 悬浮胶囊导航栏（四项等分）。
  *
- * 高光椭圆是独立浮层，绘制在导航栏之上，放大时可超出导航栏边界。
+ * 交互分三层，职责单一：
+ *   ① 玻璃胶囊本体 —— 纯视觉
+ *   ② 单一指针层 —— 铺满整条导航栏，处理「点击切页」与「长按椭圆拖动」
+ *   ③ 高光椭圆 —— 纯视觉，不带任何手势
  *
- * 手势全部使用框架内置实现，不再自写长按/命中检测（自写版本连续出错三次）：
- * - 点击：内置 detectTapGestures，铺满导航栏
- * - 长按拖动：内置 detectDragGesturesAfterLongPress，**只挂在椭圆上**，
- *   因此只有按住椭圆才会放大并进入拖动，按其他位置不会触发
+ * 为什么不把拖动挂在椭圆上（关键）：
+ * 椭圆会随手势移动，而 dragAmount 是在**椭圆自身的坐标系**里测量的。
+ * 手指右移 10px → 椭圆右移 10px → 坐标系原点也右移 10px →
+ * 下一次测到的位移被抵消，移动自我湮灭，表现为「几乎不跟手」。
+ * 因此手势必须挂在**静止**的层上，并用绝对坐标（position）算位移。
  *
- * 另外两点（此前踩过的坑）：
- * - 椭圆尺寸固定、放大只用 graphicsLayer 缩放，不参与布局测量，
- *   否则放大时会把底栏撑高，导航栏与角落按钮一起抖动
- * - 椭圆水平位置用补间动画，点按切换时平滑滑动而不是瞬移
+ * 光感：用 drawBehind + 径向渐变绘制（drawBehind 不参与布局测量，
+ * 不会撑开导航栏；径向渐变不依赖版本，Android 7+ 一致；
+ * blur() 需 Android 12+，在 Android 10 上是空操作，故不使用）。
  */
 @Composable
 fun FloatingNavBar(
@@ -613,12 +615,10 @@ fun FloatingNavBar(
 
     var scrubbing by remember { mutableStateOf(false) }
     var scrubIndex by remember { mutableIntStateOf(selected) }
-
-    // 沉浸光感：记录当前被按住的按钮，用于绘制光晕并照亮邻近元素轮廓
     var glowIndex by remember { mutableStateOf<Int?>(null) }
-    val glowEnabled = showGlow
 
     val currentSelected by rememberUpdatedState(selected)
+    val currentOnSelect by rememberUpdatedState(onSelect)
     val currentOnScrub by rememberUpdatedState(onScrub)
 
     val highlightScale by animateFloatAsState(
@@ -631,31 +631,29 @@ fun FloatingNavBar(
     )
 
     BoxWithConstraints(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)
     ) {
         val rowPad = 8.dp
-        // 四项等宽，槽位中心可直接算出，无需测量
         val slotW = ((maxWidth - rowPad * 2) / items.size).coerceAtLeast(1.dp)
         fun centerX(i: Int) = rowPad + slotW * i + slotW / 2
 
         val activeIndex = if (scrubbing) scrubIndex else selected
         val accent = MaterialTheme.colorScheme.primary
+
         val slotPx = with(density) { slotW.toPx() }
         val rowPadPx = with(density) { rowPad.toPx() }
+        val pillWPx = with(density) { HIGHLIGHT_W.toPx() }
+        val tolPx = with(density) { 14.dp.toPx() }
 
-        // 椭圆水平位置（dp）。用普通状态 + 手动动画：
-        // - 点击切换 / 松手归位：用 animate() 平滑滑动
-        // - 拖动过程：直接赋值，零延迟跟随手指，因此绝对连贯
-        //
-        // 之前用 animateDpAsState + 80ms tween，拖动时每次跨格动画都重新启动，
-        // 所以看起来一顿一顿的。
+        fun pillTargetPx(i: Int) = with(density) { (centerX(i) - HIGHLIGHT_W / 2).toPx() }
+        fun slotAt(x: Float): Int =
+            ((x - rowPadPx) / slotPx).toInt().coerceIn(0, items.size - 1)
+
+        // 椭圆位置（px）。拖动时直接跟随手指；点击/松手用弹簧动画归位
         val scope = rememberCoroutineScope()
         var pillX by remember { mutableFloatStateOf(0f) }
         var settleJob by remember { mutableStateOf<Job?>(null) }
         var firstLayout by remember { mutableStateOf(true) }
-
-        fun pillTarget(i: Int) =
-            with(density) { (centerX(i) - HIGHLIGHT_W / 2).toPx() }
 
         fun animatePillTo(target: Float) {
             settleJob?.cancel()
@@ -667,13 +665,13 @@ fun FloatingNavBar(
                         dampingRatio = Spring.DampingRatioNoBouncy,
                         stiffness = Spring.StiffnessMediumLow
                     )
-                ) { value, _ -> pillX = value }
+                ) { v, _ -> pillX = v }
             }
         }
 
         LaunchedEffect(activeIndex, maxWidth) {
             if (scrubbing) return@LaunchedEffect
-            val target = pillTarget(activeIndex)
+            val target = pillTargetPx(activeIndex)
             if (firstLayout) {
                 pillX = target
                 firstLayout = false
@@ -682,9 +680,7 @@ fun FloatingNavBar(
             }
         }
 
-        // ① 导航栏本体（纯展示）
-        // 玻璃拟态导航条：强调色轻染 + 顶部反光 + 受光描边
-        // （与设置页 GlassPanel 保持同一套观感）
+        // ① 玻璃胶囊本体（纯视觉）
         val scheme = MaterialTheme.colorScheme
         val glassDark = scheme.surface.luminance() < 0.5f
         val navGlassTop = if (glassDark) {
@@ -724,31 +720,26 @@ fun FloatingNavBar(
                     RoundedCornerShape(percent = 50)
                 )
         ) {
-            // 发光由整条导航栏绘制：横向光可以洒到邻近项目上，
-            // 且 drawBehind 只绘制不参与测量，导航条高度完全不变。
-            // 径向渐变不依赖任何版本特性，Android 7+ 一致（blur 需 12+，故不用）。
-            val rowDensity = density
-            val glowRowH = with(rowDensity) { HIGHLIGHT_H.toPx() }
             Row(
                 Modifier
                     .fillMaxWidth()
                     .padding(horizontal = rowPad, vertical = 6.dp)
                     .drawBehind {
+                        // 光晕由整条导航栏绘制：横向光才能洒到邻近项目上
                         val src = glowIndex
-                        if (!glowEnabled || src == null) return@drawBehind
-                        val accentColor = accent
-                        val cx = with(rowDensity) { centerX(src).toPx() }
+                        if (!showGlow || src == null) return@drawBehind
+                        val cx = with(density) { centerX(src).toPx() }
                         val cy = size.height / 2f
-                        val w = with(rowDensity) { HIGHLIGHT_W.toPx() }
+                        val w = pillWPx
+                        val h = with(density) { HIGHLIGHT_H.toPx() }
 
-                        // 外层：范围大而淡，负责照亮周围
                         val ow = w * 2.4f
-                        val oh = glowRowH * 3.4f
+                        val oh = h * 3.2f
                         drawRoundRect(
                             brush = androidx.compose.ui.graphics.Brush.radialGradient(
                                 colorStops = arrayOf(
-                                    0.00f to accentColor.copy(alpha = 0.30f),
-                                    0.40f to accentColor.copy(alpha = 0.13f),
+                                    0.00f to accent.copy(alpha = 0.30f),
+                                    0.40f to accent.copy(alpha = 0.13f),
                                     1.00f to Color.Transparent
                                 ),
                                 center = Offset(cx, cy),
@@ -758,14 +749,13 @@ fun FloatingNavBar(
                             size = Size(ow, oh),
                             cornerRadius = CornerRadius(oh / 2f)
                         )
-                        // 内层：紧贴按钮的一圈亮光
                         val iw = w * 1.20f
-                        val ih = glowRowH * 1.5f
+                        val ih = h * 1.5f
                         drawRoundRect(
                             brush = androidx.compose.ui.graphics.Brush.radialGradient(
                                 colorStops = arrayOf(
-                                    0.00f to accentColor.copy(alpha = 0.80f),
-                                    0.60f to accentColor.copy(alpha = 0.34f),
+                                    0.00f to accent.copy(alpha = 0.78f),
+                                    0.60f to accent.copy(alpha = 0.32f),
                                     1.00f to Color.Transparent
                                 ),
                                 center = Offset(cx, cy),
@@ -779,14 +769,11 @@ fun FloatingNavBar(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 items.forEachIndexed { idx, item ->
-                    // 光感：光源按钮自身发光；其余按钮按「离光源多远」得到受光强度，
-                    // 越近越亮，隔得远几乎不受影响 —— 像光洒在旁边的东西上
                     val src = glowIndex
-                    val litAmount = if (glowEnabled && src != null) {
-                        val d = kotlin.math.abs(idx - src)
-                        when (d) {
-                            1 -> 0.75f      // 紧邻：明显受光
-                            2 -> 0.35f      // 隔一个：微弱余光
+                    val litAmount = if (showGlow && src != null) {
+                        when (kotlin.math.abs(idx - src)) {
+                            1 -> 0.75f
+                            2 -> 0.35f
                             else -> 0f
                         }
                     } else 0f
@@ -795,7 +782,7 @@ fun FloatingNavBar(
                         icon = item.second,
                         active = idx == activeIndex,
                         accent = accent,
-                        glowing = glowEnabled && src == idx,
+                        glowing = showGlow && src == idx,
                         litAmount = litAmount,
                         modifier = Modifier.weight(1f)
                     )
@@ -803,35 +790,7 @@ fun FloatingNavBar(
             }
         }
 
-        // ② 点击层：铺满导航栏，只处理点击
-        Box(
-            Modifier
-                .matchParentSize()
-                .pointerInput(items.size) {
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        val idx = ((down.position.x - rowPadPx) / slotPx)
-                            .toInt().coerceIn(0, items.size - 1)
-                        // 按下即点亮光感
-                        if (glowEnabled) glowIndex = idx
-                        var tapped = false
-                        while (true) {
-                            val ev = awaitPointerEvent()
-                            val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
-                            if (!ch.pressed) { tapped = true; break }
-                            val dx = ch.position.x - down.position.x
-                            val dy = ch.position.y - down.position.y
-                            if (dx * dx + dy * dy >
-                                viewConfiguration.touchSlop * viewConfiguration.touchSlop
-                            ) break
-                        }
-                        glowIndex = null          // 抬起/取消即熄灭
-                        if (tapped) onSelect(idx)
-                    }
-                }
-        )
-
-        // ③ 高光椭圆：绘制在最上层，只在自己的范围内接收长按拖动
+        // ② 单一指针层：静止不动，因此坐标稳定，拖动才能真正跟手
         val baseViewConfig = androidx.compose.ui.platform.LocalViewConfiguration.current
         val shortViewConfig = remember(baseViewConfig) {
             ShortLongPressViewConfiguration(baseViewConfig)
@@ -841,83 +800,93 @@ fun FloatingNavBar(
         ) {
             Box(
                 Modifier
-                    .align(Alignment.CenterStart)
-                    .offset(x = with(density) { pillX.toDp() }, y = 0.dp)
-                    .size(HIGHLIGHT_W, HIGHLIGHT_H)
-                    .graphicsLayer {
-                        scaleX = highlightScale
-                        scaleY = highlightScale
-                    }
-                    .clip(RoundedCornerShape(percent = 50))
-                    .background(accent.copy(alpha = 0.16f))
-                    .border(1.5.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(percent = 50))
+                    .matchParentSize()
                     .pointerInput(items.size) {
-                        detectDragGesturesAfterLongPress(
-                            onDragStart = {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+
+                            // 命中判定：按下的 x 是否落在当前高光椭圆内（含容差）
+                            val left = pillTargetPx(currentSelected)
+                            val inEllipse = down.position.x >= left - tolPx &&
+                                down.position.x <= left + pillWPx + tolPx
+
+                            if (inEllipse) {
+                                val pressed = slotAt(down.position.x)
+                                if (showGlow) glowIndex = pressed
+
+                                val lp = awaitLongPressOrCancellation(down.id)
+                                if (lp == null) {
+                                    // 长按前抬起/移动 → 当普通点击
+                                    glowIndex = null
+                                    currentOnSelect(slotAt(down.position.x))
+                                    return@awaitEachGesture
+                                }
+
+                                // —— 进入拖动 ——
                                 scrubIndex = currentSelected
                                 scrubbing = true
-                                if (glowEnabled) glowIndex = currentSelected
-                                // 打断进行中的归位动画，准备接管
                                 settleJob?.cancel()
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            },
-                            onDragEnd = {
-                                scrubbing = false
-                                glowIndex = null
-                                // 松手：平滑吸附到当前所在槽位
-                                animatePillTo(pillTarget(scrubIndex))
-                            },
-                            onDragCancel = {
-                                scrubbing = false
-                                glowIndex = null
-                                animatePillTo(pillTarget(scrubIndex))
-                            },
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-                                if (!scrubbing) return@detectDragGesturesAfterLongPress
 
-                                // ① 连续跟手，并夹紧在首尾槽位之间，不会滑出导航栏
-                                val minX = pillTarget(0)
-                                val maxX = pillTarget(items.size - 1)
-                                pillX = (pillX + dragAmount.x).coerceIn(minX, maxX)
+                                // 用绝对坐标算位移：本层不移动，坐标稳定
+                                val startPill = pillX
+                                val startX = lp.position.x
+                                val minX = pillTargetPx(0)
+                                val maxX = pillTargetPx(items.size - 1)
 
-                                // ② 由椭圆的连续位置直接反推目标槽位。
-                                // 之前用「阈值累加」的写法有 bug：跨一格只需要
-                                // slotPx/3，却把 acc 减掉一整格 slotPx，acc 立刻变成
-                                // 大负数，紧接着触发反向循环又退回来，于是来回横跳、
-                                // 永远拖不到最后一格。改用位置反推后天然单调。
-                                val half = with(density) { HIGHLIGHT_W.toPx() } / 2f
-                                val idx = ((pillX + half - rowPadPx - slotPx / 2f) / slotPx)
-                                    .roundToInt()
-                                    .coerceIn(0, items.size - 1)
-                                if (idx != scrubIndex) {
-                                    scrubIndex = idx
-                                    currentOnScrub(idx)
+                                drag(down.id) { ch ->
+                                    ch.consume()
+                                    val nx = (startPill + (ch.position.x - startX))
+                                        .coerceIn(minX, maxX)
+                                    pillX = nx
+                                    val idx = ((nx + pillWPx / 2f - rowPadPx - slotPx / 2f) / slotPx)
+                                        .roundToInt().coerceIn(0, items.size - 1)
+                                    if (idx != scrubIndex) {
+                                        scrubIndex = idx
+                                        currentOnScrub(idx)
+                                    }
                                 }
+
+                                scrubbing = false
+                                glowIndex = null
+                                animatePillTo(pillTargetPx(scrubIndex))
+                            } else {
+                                // 普通点击：等抬起，移动过 slop 则忽略
+                                var tapped = false
+                                while (true) {
+                                    val ev = awaitPointerEvent()
+                                    val ch2 = ev.changes.firstOrNull { it.id == down.id } ?: break
+                                    if (!ch2.pressed) { tapped = true; break }
+                                    val dx = ch2.position.x - down.position.x
+                                    val dy = ch2.position.y - down.position.y
+                                    if (dx * dx + dy * dy >
+                                        viewConfiguration.touchSlop * viewConfiguration.touchSlop
+                                    ) break
+                                }
+                                glowIndex = null
+                                if (tapped) currentOnSelect(slotAt(down.position.x))
                             }
-                        )
+                        }
                     }
             )
         }
+
+        // ③ 高光椭圆：纯视觉，不带手势（手势在②中统一处理）
+        Box(
+            Modifier
+                .align(Alignment.CenterStart)
+                .offset(x = with(density) { pillX.toDp() }, y = 0.dp)
+                .size(HIGHLIGHT_W, HIGHLIGHT_H)
+                .graphicsLayer {
+                    scaleX = highlightScale
+                    scaleY = highlightScale
+                }
+                .clip(RoundedCornerShape(percent = 50))
+                .background(accent.copy(alpha = 0.16f))
+                .border(1.5.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(percent = 50))
+        )
     }
 }
-
-/**
- * 缩短长按阈值的 ViewConfiguration：系统默认约 500ms，对"长按拖动"偏高，
- * 这里压到 250ms。其余参数沿用系统值。
- */
-private class ShortLongPressViewConfiguration(
-    private val base: androidx.compose.ui.platform.ViewConfiguration
-) : androidx.compose.ui.platform.ViewConfiguration by base {
-    override val longPressTimeoutMillis: Long get() = 250L
-}
-
-/** 长按时椭圆放大的倍数 */
-private const val HIGHLIGHT_LIFT_SCALE = 1.25f
-
-/** 选中态高光椭圆的尺寸：四个位置统一 */
-private val HIGHLIGHT_W = 66.dp
-private val HIGHLIGHT_H = 48.dp
 
 /**
  * 导航项：纯展示，点击与长按由上层统一处理。
