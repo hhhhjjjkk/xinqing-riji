@@ -29,6 +29,8 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.animation.core.Spring
@@ -65,6 +67,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.compositeOver
@@ -721,8 +724,58 @@ fun FloatingNavBar(
                     RoundedCornerShape(percent = 50)
                 )
         ) {
+            // 发光由整条导航栏绘制：横向光可以洒到邻近项目上，
+            // 且 drawBehind 只绘制不参与测量，导航条高度完全不变。
+            // 径向渐变不依赖任何版本特性，Android 7+ 一致（blur 需 12+，故不用）。
+            val rowDensity = density
+            val glowRowH = with(rowDensity) { HIGHLIGHT_H.toPx() }
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = rowPad, vertical = 6.dp),
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = rowPad, vertical = 6.dp)
+                    .drawBehind {
+                        val src = glowIndex
+                        if (!glowEnabled || src == null) return@drawBehind
+                        val accentColor = accent
+                        val cx = with(rowDensity) { centerX(src).toPx() }
+                        val cy = size.height / 2f
+                        val w = with(rowDensity) { HIGHLIGHT_W.toPx() }
+
+                        // 外层：范围大而淡，负责照亮周围
+                        val ow = w * 2.4f
+                        val oh = glowRowH * 3.4f
+                        drawRoundRect(
+                            brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                                colorStops = arrayOf(
+                                    0.00f to accentColor.copy(alpha = 0.30f),
+                                    0.40f to accentColor.copy(alpha = 0.13f),
+                                    1.00f to Color.Transparent
+                                ),
+                                center = Offset(cx, cy),
+                                radius = ow / 2f
+                            ),
+                            topLeft = Offset(cx - ow / 2f, cy - oh / 2f),
+                            size = Size(ow, oh),
+                            cornerRadius = CornerRadius(oh / 2f)
+                        )
+                        // 内层：紧贴按钮的一圈亮光
+                        val iw = w * 1.20f
+                        val ih = glowRowH * 1.5f
+                        drawRoundRect(
+                            brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                                colorStops = arrayOf(
+                                    0.00f to accentColor.copy(alpha = 0.80f),
+                                    0.60f to accentColor.copy(alpha = 0.34f),
+                                    1.00f to Color.Transparent
+                                ),
+                                center = Offset(cx, cy),
+                                radius = iw / 2f
+                            ),
+                            topLeft = Offset(cx - iw / 2f, cy - ih / 2f),
+                            size = Size(iw, ih),
+                            cornerRadius = CornerRadius(ih / 2f)
+                        )
+                    },
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 items.forEachIndexed { idx, item ->
@@ -869,13 +922,16 @@ private val HIGHLIGHT_H = 48.dp
 /**
  * 导航项：纯展示，点击与长按由上层统一处理。
  *
- * 沉浸光感（纯光效，不改变任何元素尺寸）：
- * - glowing：被按住的按钮 —— 自身发光
- * - litAmount：被邻近光源照亮的程度 0..1
+ * 沉浸光感（Android 7+ 全兼容，且不改变任何布局）：
  *
- * 关键：发光用**径向渐变**实现，不能用 Modifier.blur()。
- * blur 需要 API 31（Android 12）以上才生效，在 Android 10 等旧版本上是
- * 静默空操作，光晕会完全消失。径向渐变是纯着色器绘制，全版本可用。
+ * 关键点一：光晕用 **drawBehind + 径向渐变**绘制。
+ * - 不用 Modifier.blur()：它需要 Android 12+，在 Android 10 上是静默空操作。
+ * - 不用「大尺寸 Box 叠加」：那样的子元素会参与布局测量，
+ *   把导航条从 60dp 撑到 130dp 以上，既破坏布局，
+ *   又让椭圆（48dp）居中在变高的容器里，手指按不到它，拖动失效。
+ *   drawBehind 只绘制、不参与测量，导航条尺寸完全不受影响。
+ *
+ * 关键点二：发光是纯光效，不缩放任何元素。
  */
 @Composable
 private fun NavItem(
@@ -898,50 +954,29 @@ private fun NavItem(
         label = "navLit"
     )
 
-    Box(modifier, contentAlignment = Alignment.Center) {
-        // ① 被照亮：极淡的受光底色（不放大、不加边框）
-        if (lit > 0.01f) {
-            Box(
-                Modifier
-                    .size(HIGHLIGHT_W, HIGHLIGHT_H)
-                    .graphicsLayer { alpha = lit }
-                    .background(accent.copy(alpha = 0.12f), RoundedCornerShape(percent = 50))
-            )
-        }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val wPx = with(density) { HIGHLIGHT_W.toPx() }
+    val hPx = with(density) { HIGHLIGHT_H.toPx() }
 
-        // ② 自身发光：外周 + 内层两层径向渐变，自然衰减成柔光
-        if (glow > 0.01f) {
-            // 外层：范围大、很淡，负责"照亮周围"
-            Box(
-                Modifier
-                    .size(HIGHLIGHT_W * 2.1f, HIGHLIGHT_H * 2.6f)
-                    .graphicsLayer { alpha = glow * 0.9f }
-                    .background(
-                        androidx.compose.ui.graphics.Brush.radialGradient(
-                            0.00f to accent.copy(alpha = 0.38f),
-                            0.35f to accent.copy(alpha = 0.20f),
-                            0.65f to accent.copy(alpha = 0.07f),
-                            1.00f to Color.Transparent
-                        ),
-                        RoundedCornerShape(percent = 50)
-                    )
-            )
-            // 内层：紧贴按钮的一圈亮光
-            Box(
-                Modifier
-                    .size(HIGHLIGHT_W * 1.18f, HIGHLIGHT_H * 1.32f)
-                    .graphicsLayer { alpha = glow }
-                    .background(
-                        androidx.compose.ui.graphics.Brush.radialGradient(
-                            0.00f to accent.copy(alpha = 0.75f),
-                            0.55f to accent.copy(alpha = 0.38f),
-                            1.00f to Color.Transparent
-                        ),
-                        RoundedCornerShape(percent = 50)
-                    )
-            )
-        }
-
+    // 发光体由整条导航栏统一绘制（见下方 Row 的 drawBehind），
+    // 因为单个导航项只有约 80dp 宽，画不下也照不到旁边的元素。
+    // 这里只负责「被邻光照亮」的着色。
+    Box(
+        modifier.drawBehind {
+            if (lit > 0.01f) {
+                val cx = size.width / 2f
+                val cy = size.height / 2f
+                drawRoundRect(
+                    color = accent.copy(alpha = 0.13f * lit),
+                    topLeft = Offset(cx - wPx / 2f, cy - hPx / 2f),
+                    size = Size(wPx, hPx),
+                    cornerRadius = CornerRadius(hPx / 2f)
+                )
+            }
+        },
+        contentAlignment = Alignment.Center
+    ) {
+        // 固定尺寸：导航条高度只由它决定（48dp + 内边距），不受光晕影响
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
