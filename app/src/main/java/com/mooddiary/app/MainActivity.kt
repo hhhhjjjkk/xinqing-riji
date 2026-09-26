@@ -465,9 +465,15 @@ fun MoodDiaryApp(
                         scope.launch { pagerState.animateScrollToPage(page) }
                     }
                 },
-                // 长按高光椭圆拖动时用即时切换，避免连续动画互相打断
-                onScrub = { page ->
-                    scope.launch { pagerState.scrollToPage(page) }
+                // 拖动时按「整页 + 小数偏移」滚动，内容页随椭圆连续移动。
+                // 之前只传整页并用 scrollToPage(page) 瞬间跳页，
+                // 所以拖动过程中看不到过渡动画。
+                onScrub = { page, fraction ->
+                    scope.launch { pagerState.scrollToPage(page, fraction) }
+                },
+                // 松手：动画平滑吸附到目标页
+                onScrubEnd = { page ->
+                    scope.launch { pagerState.animateScrollToPage(page) }
                 },
                 showGlow = settings.immersiveGlow
             )
@@ -574,27 +580,28 @@ fun MoodDiaryApp(
 /**
  * 悬浮胶囊导航栏（四项等分）。
  *
- * 交互分三层，职责单一：
- *   ① 玻璃胶囊本体 —— 纯视觉
- *   ② 单一指针层 —— 铺满整条导航栏，处理「点击切页」与「长按椭圆拖动」
- *   ③ 高光椭圆 —— 纯视觉，不带任何手势
+ * 三层结构，职责单一：
+ *   ① 玻璃胶囊本体 —— 纯视觉（仅描边，与页面同色，无割裂）
+ *   ② 单一指针层 —— 铺满导航栏且静止，处理点击与长按拖动
+ *   ③ 高光椭圆 —— 光源本体，光晕在其自身坐标系内绘制（不会错位）
  *
- * 为什么不把拖动挂在椭圆上（关键）：
- * 椭圆会随手势移动，而 dragAmount 是在**椭圆自身的坐标系**里测量的。
- * 手指右移 10px → 椭圆右移 10px → 坐标系原点也右移 10px →
- * 下一次测到的位移被抵消，移动自我湮灭，表现为「几乎不跟手」。
- * 因此手势必须挂在**静止**的层上，并用绝对坐标（position）算位移。
+ * 光效：
+ * - 椭圆向外发出柔光（径向渐变，Android 7+ 全兼容，不用 blur）
+ * - 被光照到的相邻项目会**变亮并被染上光的颜色**——
+ *   受光量按与光源的距离衰减计算，越近越亮、染色越明显，
+ *   这是"光照射到物体上"的效果，而不是物体自己发光
  *
- * 光感：用 drawBehind + 径向渐变绘制（drawBehind 不参与布局测量，
- * 不会撑开导航栏；径向渐变不依赖版本，Android 7+ 一致；
- * blur() 需 Android 12+，在 Android 10 上是空操作，故不使用）。
+ * 拖动时的页面跟随：
+ * 通过 scrollToPage(page, fraction) 传入**小数偏移**，
+ * 让内容页随椭圆连续移动，而不是按整页瞬间跳转。
  */
 @Composable
 fun FloatingNavBar(
     items: List<Pair<String, androidx.compose.ui.graphics.vector.ImageVector>>,
     selected: Int,
     onSelect: (Int) -> Unit,
-    onScrub: (Int) -> Unit,
+    onScrub: (page: Int, fraction: Float) -> Unit,
+    onScrubEnd: (page: Int) -> Unit,
     showGlow: Boolean = true
 ) {
     val density = androidx.compose.ui.platform.LocalDensity.current
@@ -603,16 +610,11 @@ fun FloatingNavBar(
     var scrubbing by remember { mutableStateOf(false) }
     var scrubIndex by remember { mutableIntStateOf(selected) }
     var glowIndex by remember { mutableStateOf<Int?>(null) }
-    // 光源强度：按住时点亮，松开渐隐（用于椭圆光晕）
-    val glowStrength by animateFloatAsState(
-        targetValue = if (showGlow && glowIndex != null) 1f else 0f,
-        animationSpec = tween(durationMillis = 220),
-        label = "glowStrength"
-    )
 
     val currentSelected by rememberUpdatedState(selected)
     val currentOnSelect by rememberUpdatedState(onSelect)
     val currentOnScrub by rememberUpdatedState(onScrub)
+    val currentOnScrubEnd by rememberUpdatedState(onScrubEnd)
 
     val highlightScale by animateFloatAsState(
         targetValue = if (scrubbing) HIGHLIGHT_LIFT_SCALE else 1f,
@@ -621,6 +623,12 @@ fun FloatingNavBar(
             stiffness = Spring.StiffnessMedium
         ),
         label = "highlightScale"
+    )
+
+    val glowStrength by animateFloatAsState(
+        targetValue = if (showGlow && glowIndex != null) 1f else 0f,
+        animationSpec = tween(durationMillis = 220),
+        label = "glowStrength"
     )
 
     BoxWithConstraints(
@@ -642,7 +650,10 @@ fun FloatingNavBar(
         fun slotAt(x: Float): Int =
             ((x - rowPadPx) / slotPx).toInt().coerceIn(0, items.size - 1)
 
-        // 椭圆位置（px）。拖动时直接跟随手指；点击/松手用弹簧动画归位
+        // 由椭圆位置换算出的**连续页位置**（小数），用于驱动页面跟随
+        fun pagePosOf(pill: Float): Float =
+            (pill + pillWPx / 2f - rowPadPx - slotPx / 2f) / slotPx
+
         val scope = rememberCoroutineScope()
         var pillX by remember { mutableFloatStateOf(0f) }
         var settleJob by remember { mutableStateOf<Job?>(null) }
@@ -673,15 +684,13 @@ fun FloatingNavBar(
             }
         }
 
-        // ① 玻璃胶囊本体（纯视觉）
+        // ① 玻璃胶囊本体（纯视觉：与页面同色 + 描边）
         val scheme = MaterialTheme.colorScheme
         val glassDark = scheme.surface.luminance() < 0.5f
         Box(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(percent = 50))
-                // 填充与页面背景同色：不产生任何色块差异，
-                // 只靠描边勾勒轮廓，从而与页面完全融为一体、无分割感
                 .background(scheme.surface, RoundedCornerShape(percent = 50))
                 .border(
                     1.dp,
@@ -701,23 +710,25 @@ fun FloatingNavBar(
                     .padding(horizontal = rowPad, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // 当前光源位置（连续，用于计算每个项目接收到多少光）
+                val lightCenter = pagePosOf(pillX)
                 items.forEachIndexed { idx, item ->
-                    val src = glowIndex
-                    // 相邻项不做任何自身发光/描边处理：
-                    // 照亮效果完全来自椭圆（光源）向外扩散的光晕，
-                    // 光自然落在旁边的图标上，而不是让它们各自发光。
+                    // 受光量：距离 0 → 1.0，距离 1 → 0.5，距离 2 → 0，再远不受影响
+                    val dist = kotlin.math.abs(idx - lightCenter)
+                    val light = ((2f - dist) / 2f).coerceIn(0f, 1f) * glowStrength
                     NavItem(
                         label = item.first,
                         icon = item.second,
                         active = idx == activeIndex,
                         accent = accent,
+                        lightAmount = light,
                         modifier = Modifier.weight(1f)
                     )
                 }
             }
         }
 
-        // ② 单一指针层：静止不动，因此坐标稳定，拖动才能真正跟手
+        // ② 单一指针层（静止，坐标稳定；点击 + 长按拖动统一在此处理）
         val baseViewConfig = androidx.compose.ui.platform.LocalViewConfiguration.current
         val shortViewConfig = remember(baseViewConfig) {
             ShortLongPressViewConfiguration(baseViewConfig)
@@ -731,19 +742,15 @@ fun FloatingNavBar(
                     .pointerInput(items.size) {
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
-
-                            // 命中判定：按下的 x 是否落在当前高光椭圆内（含容差）
                             val left = pillTargetPx(currentSelected)
                             val inEllipse = down.position.x >= left - tolPx &&
                                 down.position.x <= left + pillWPx + tolPx
 
                             if (inEllipse) {
-                                val pressed = slotAt(down.position.x)
-                                if (showGlow) glowIndex = pressed
+                                if (showGlow) glowIndex = currentSelected
 
                                 val lp = awaitLongPressOrCancellation(down.id)
                                 if (lp == null) {
-                                    // 长按前抬起/移动 → 当普通点击
                                     glowIndex = null
                                     currentOnSelect(slotAt(down.position.x))
                                     return@awaitEachGesture
@@ -755,7 +762,6 @@ fun FloatingNavBar(
                                 settleJob?.cancel()
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
 
-                                // 用绝对坐标算位移：本层不移动，坐标稳定
                                 val startPill = pillX
                                 val startX = lp.position.x
                                 val minX = pillTargetPx(0)
@@ -766,19 +772,31 @@ fun FloatingNavBar(
                                     val nx = (startPill + (ch.position.x - startX))
                                         .coerceIn(minX, maxX)
                                     pillX = nx
-                                    val idx = ((nx + pillWPx / 2f - rowPadPx - slotPx / 2f) / slotPx)
-                                        .roundToInt().coerceIn(0, items.size - 1)
-                                    if (idx != scrubIndex) {
-                                        scrubIndex = idx
-                                        currentOnScrub(idx)
+
+                                    // 连续页位置 → 拆成整页 + 小数偏移，
+                                    // 让内容页随椭圆平滑移动（这才是"动画"）
+                                    val pageF = pagePosOf(nx)
+                                    val base = kotlin.math.floor(pageF).toInt()
+                                    val frac = pageF - base
+                                    val (pp, ff) = if (frac > 0.5f) {
+                                        (base + 1) to (frac - 1f)
+                                    } else {
+                                        base to frac
                                     }
+                                    val clampedPage = pp.coerceIn(0, items.size - 1)
+                                    if (clampedPage != scrubIndex) {
+                                        scrubIndex = clampedPage
+                                    }
+                                    currentOnScrub(clampedPage, ff)
                                 }
 
                                 scrubbing = false
                                 glowIndex = null
+                                // 松手：椭圆与页面各自平滑落到目标页
+                                currentOnScrubEnd(scrubIndex)
                                 animatePillTo(pillTargetPx(scrubIndex))
                             } else {
-                                // 普通点击：等抬起，移动过 slop 则忽略
+                                // 普通点击
                                 var tapped = false
                                 while (true) {
                                     val ev = awaitPointerEvent()
@@ -798,11 +816,7 @@ fun FloatingNavBar(
             )
         }
 
-        // ③ 高光椭圆：光源本体（纯视觉，不带手势；手势在②统一处理）
-        //
-        // 发光画在椭圆**自己的坐标系**里，因此光晕与椭圆天然对齐，
-        // 不会像此前画在 Row 上那样因坐标系不同而错位。
-        // 光从椭圆向外扩散、照亮周围元素，而不是让周围元素各自发光。
+        // ③ 高光椭圆：光源本体（光晕在本坐标系内绘制，与椭圆天然对齐）
         Box(
             Modifier
                 .align(Alignment.CenterStart)
@@ -813,8 +827,6 @@ fun FloatingNavBar(
                     if (g <= 0.01f) return@drawBehind
                     val cx = size.width / 2f
                     val cy = size.height / 2f
-                    // 向外扩散的光晕：中心最亮，向外平滑衰减。
-                    // 绘制半径约为椭圆的一半外扩，因此只照亮紧邻区域。
                     val rw = size.width * 1.9f
                     val rh = size.height * 2.4f
                     drawRoundRect(
@@ -844,29 +856,13 @@ fun FloatingNavBar(
     }
 }
 
-/** 长按时椭圆放大的倍数 */
-private const val HIGHLIGHT_LIFT_SCALE = 1.25f
-
-/** 选中态高光椭圆的尺寸：四个位置统一 */
-private val HIGHLIGHT_W = 66.dp
-private val HIGHLIGHT_H = 48.dp
-
 /**
- * 缩短长按阈值的 ViewConfiguration：系统默认约 500ms，对「长按拖动」偏高，
- * 这里压到 250ms。其余参数沿用系统值。
- */
-private class ShortLongPressViewConfiguration(
-    private val base: androidx.compose.ui.platform.ViewConfiguration
-) : androidx.compose.ui.platform.ViewConfiguration by base {
-    override val longPressTimeoutMillis: Long get() = 250L
-}
-
-/**
- * 导航项：纯展示。
+ * 导航项。
  *
- * 不参与任何发光绘制——光效由导航栏的高光椭圆（光源）向外扩散实现，
- * 这样受光方向、范围都以椭圆为唯一基准，不会出现各元素各自发光、
- * 或光晕与椭圆错位的问题。
+ * lightAmount = 从椭圆光源接收到的光量 0..1：
+ * - 提高图标与文字的亮度
+ * - 并向光的颜色（强调色）染色
+ * 这是"被光照射"的效果——元素本身不发光，只是被照亮、被染色。
  */
 @Composable
 private fun NavItem(
@@ -874,8 +870,24 @@ private fun NavItem(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     active: Boolean,
     accent: Color,
+    lightAmount: Float = 0f,
     modifier: Modifier = Modifier
 ) {
+    // 受光量做平滑过渡，避免跟随手指时颜色跳动
+    val light by animateFloatAsState(
+        targetValue = lightAmount.coerceIn(0f, 1f),
+        animationSpec = tween(durationMillis = 90),
+        label = "navLight"
+    )
+
+    val base = if (active) accent else MaterialTheme.colorScheme.onSurfaceVariant
+    // 先向强调色染色，再略向白色提亮 → 变亮 + 被染上光的颜色
+    val litColor = androidx.compose.ui.graphics.lerp(
+        androidx.compose.ui.graphics.lerp(base, accent, (light * 0.60f).coerceIn(0f, 1f)),
+        Color.White,
+        (light * 0.18f).coerceIn(0f, 1f)
+    )
+
     Box(modifier, contentAlignment = Alignment.Center) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -884,14 +896,14 @@ private fun NavItem(
         ) {
             Icon(
                 icon, label,
-                tint = if (active) accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = litColor,
                 modifier = Modifier.size(24.dp)
             )
             Text(
                 label,
                 fontSize = 11.sp,
-                color = if (active) accent else MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = if (active) FontWeight.Bold else FontWeight.Normal
+                color = litColor,
+                fontWeight = if (active || light > 0.35f) FontWeight.Bold else FontWeight.Normal
             )
         }
     }
