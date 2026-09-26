@@ -882,7 +882,7 @@ fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) 
                     )
                 }
                 // 大号 emoji
-                Text(topMood.emoji, fontSize = 52.sp)
+                Text(topMood!!.emoji, fontSize = 52.sp)
             }
         }
 
