@@ -22,6 +22,7 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -560,19 +561,15 @@ fun MoodDiaryApp(
  *
  * 高光椭圆是独立浮层，绘制在导航栏之上，放大时可超出导航栏边界。
  *
- * 关键：整个导航栏只保留**一个**指针处理层，它同时负责
- *   ① 点击任意槽位 → 切换页面
- *   ② 长按高光椭圆 → 放大并左右拖动切换页面
+ * 手势全部使用框架内置实现，不再自写长按/命中检测（自写版本连续出错三次）：
+ * - 点击：内置 detectTapGestures，铺满导航栏
+ * - 长按拖动：内置 detectDragGesturesAfterLongPress，**只挂在椭圆上**，
+ *   因此只有按住椭圆才会放大并进入拖动，按其他位置不会触发
  *
- * 之前把 clickable 放在下层、手势层铺在上层，导致上层节点独占了指针事件
- * （Compose 默认不与兄弟节点共享指针事件），下层点击全部失效。
- * 现在合并为一层，不再有事件被拦截的问题。
- *
- * 另外两个坑：
+ * 另外两点（此前踩过的坑）：
  * - 椭圆尺寸固定、放大只用 graphicsLayer 缩放，不参与布局测量，
- *   否则放大时会把底栏撑高，导航栏与角落按钮一起抖动。
- * - pointerInput 的 key 用 items.size 这种稳定值。若用当前选中项作 key，
- *   拖动切换页面会导致 pointerInput 重启、手势被取消，于是拖不动。
+ *   否则放大时会把底栏撑高，导航栏与角落按钮一起抖动
+ * - 椭圆水平位置用补间动画，点按切换时平滑滑动而不是瞬移
  */
 @Composable
 fun FloatingNavBar(
@@ -586,9 +583,10 @@ fun FloatingNavBar(
 
     var scrubbing by remember { mutableStateOf(false) }
     var scrubIndex by remember { mutableIntStateOf(selected) }
+    // 拖动累计位移（跨格换页用）：每次开始拖动时复位
+    var acc by remember { mutableFloatStateOf(0f) }
 
     val currentSelected by rememberUpdatedState(selected)
-    val currentOnSelect by rememberUpdatedState(onSelect)
     val currentOnScrub by rememberUpdatedState(onScrub)
 
     val highlightScale by animateFloatAsState(
@@ -610,16 +608,21 @@ fun FloatingNavBar(
 
         val activeIndex = if (scrubbing) scrubIndex else selected
         val accent = MaterialTheme.colorScheme.primary
+        val slotPx = with(density) { slotW.toPx() }
+        val rowPadPx = with(density) { rowPad.toPx() }
 
-        // 椭圆水平位置做补间动画：点按切换时平滑滑过去，而不是瞬移
-        val targetX = centerX(activeIndex) - HIGHLIGHT_W / 2
+        // 椭圆水平位置：连续平滑的补间动画
         val animatedX by animateDpAsState(
-            targetValue = targetX,
-            animationSpec = tween(durationMillis = if (scrubbing) 90 else 260),
+            targetValue = centerX(activeIndex) - HIGHLIGHT_W / 2,
+            animationSpec = if (scrubbing) {
+                tween(durationMillis = 80)
+            } else {
+                spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
+            },
             label = "pillX"
         )
 
-        // ① 导航栏本体（纯展示，不处理点击）
+        // ① 导航栏本体（纯展示）
         Surface(
             shape = RoundedCornerShape(percent = 50),
             color = MaterialTheme.colorScheme.surface,
@@ -645,109 +648,66 @@ fun FloatingNavBar(
             }
         }
 
-        // ② 高光椭圆浮层：固定尺寸 + graphicsLayer 缩放，不引起布局变化
-        Box(
-            Modifier
-                .align(Alignment.CenterStart)
-                .offset(x = animatedX, y = 0.dp)
-                .size(HIGHLIGHT_W, HIGHLIGHT_H)
-                .graphicsLayer {
-                    scaleX = highlightScale
-                    scaleY = highlightScale
-                }
-                .clip(RoundedCornerShape(percent = 50))
-                .background(accent.copy(alpha = 0.16f))
-                .border(1.5.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(percent = 50))
-        )
-
-        // ③ 唯一的指针处理层：点击切页 + 长按椭圆拖动
-        val wPx = with(density) { HIGHLIGHT_W.toPx() }
-        val hPx = with(density) { HIGHLIGHT_H.toPx() }
-        val slotPx = with(density) { slotW.toPx() }
-        val rowPadPx = with(density) { rowPad.toPx() }
-        val tolPx = with(density) { 8.dp.toPx() }
-        val topPx = with(density) { 6.dp.toPx() }
-
-        fun slotAt(x: Float): Int =
-            ((x - rowPadPx) / slotPx).toInt().coerceIn(0, items.size - 1)
-
-        // 用自定义 ViewConfiguration 覆盖长按阈值后再挂手势，
-        // 这样 awaitLongPressOrCancellation 会用 250ms 而不是系统默认 ~500ms
-        val baseViewConfig = androidx.compose.ui.platform.LocalViewConfiguration.current
-        val shortViewConfig = remember(baseViewConfig) {
-            ShortLongPressViewConfiguration(baseViewConfig)
-        }
-
-        androidx.compose.runtime.CompositionLocalProvider(
-            androidx.compose.ui.platform.LocalViewConfiguration provides shortViewConfig
-        ) {
+        // ② 点击层：铺满导航栏，只处理点击
         Box(
             Modifier
                 .matchParentSize()
                 .pointerInput(items.size) {
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        val slop = viewConfiguration.touchSlop
-                        val cx = with(density) { centerX(currentSelected).toPx() }
-                        val left = cx - wPx / 2f
-                        val inEllipse =
-                            down.position.x >= left - tolPx &&
-                            down.position.x <= left + wPx + tolPx &&
-                            down.position.y >= topPx - tolPx &&
-                            down.position.y <= topPx + hPx + tolPx
-
-                        if (!inEllipse) {
-                            // —— 普通点击：等待抬起；移动超过 slop 则视为滑动，忽略 ——
-                            var tapped = false
-                            while (true) {
-                                val ev = awaitPointerEvent()
-                                val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
-                                if (!ch.pressed) { tapped = true; break }
-                                val dx = ch.position.x - down.position.x
-                                val dy = ch.position.y - down.position.y
-                                if (dx * dx + dy * dy > slop * slop) break
-                            }
-                            if (tapped) currentOnSelect(slotAt(down.position.x))
-                            return@awaitEachGesture
-                        }
-
-                        // —— 按在椭圆上：等长按 ——
-                        // 必须用 Compose 提供的 awaitLongPressOrCancellation：
-                        // 它在该指针作用域内是安全的。此前用 withTimeoutOrNull
-                        // 包住 awaitPointerEvent，超时取消会让手势状态错乱，
-                        // 长按永远等不到，所以怎么按都进不了拖动。
-                        // 阈值通过 LocalViewConfiguration 调短（见文件末尾 LongPressViewConfiguration）。
-                        val longPress = awaitLongPressOrCancellation(down.id)
-                        if (longPress == null) {
-                            // 长按前抬起或移动过多：按普通点击处理
-                            currentOnSelect(slotAt(down.position.x))
-                            return@awaitEachGesture
-                        }
-
-                        // —— 进入拖动态 ——
-                        var idx = currentSelected
-                        scrubIndex = idx
-                        scrubbing = true
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        longPress.consume()
-
-                        var acc = 0f
-                        drag(down.id) { change ->
-                            change.consume()
-                            acc += change.positionChange().x
-                            while (acc >= slotPx / 2f && idx < items.size - 1) {
-                                idx += 1; acc -= slotPx
-                                scrubIndex = idx; currentOnScrub(idx)
-                            }
-                            while (acc <= -slotPx / 2f && idx > 0) {
-                                idx -= 1; acc += slotPx
-                                scrubIndex = idx; currentOnScrub(idx)
-                            }
-                        }
-                        scrubbing = false
+                    detectTapGestures { offset ->
+                        val idx = ((offset.x - rowPadPx) / slotPx)
+                            .toInt().coerceIn(0, items.size - 1)
+                        onSelect(idx)
                     }
                 }
         )
+
+        // ③ 高光椭圆：绘制在最上层，只在自己的范围内接收长按拖动
+        val baseViewConfig = androidx.compose.ui.platform.LocalViewConfiguration.current
+        val shortViewConfig = remember(baseViewConfig) {
+            ShortLongPressViewConfiguration(baseViewConfig)
+        }
+        androidx.compose.runtime.CompositionLocalProvider(
+            androidx.compose.ui.platform.LocalViewConfiguration provides shortViewConfig
+        ) {
+            Box(
+                Modifier
+                    .align(Alignment.CenterStart)
+                    .offset(x = animatedX, y = 0.dp)
+                    .size(HIGHLIGHT_W, HIGHLIGHT_H)
+                    .graphicsLayer {
+                        scaleX = highlightScale
+                        scaleY = highlightScale
+                    }
+                    .clip(RoundedCornerShape(percent = 50))
+                    .background(accent.copy(alpha = 0.16f))
+                    .border(1.5.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(percent = 50))
+                    .pointerInput(items.size) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = {
+                                scrubIndex = currentSelected
+                                acc = 0f
+                                scrubbing = true
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            },
+                            onDragEnd = { scrubbing = false },
+                            onDragCancel = { scrubbing = false },
+                            onDrag = { change, dragAmount ->
+                                change.consume()
+                                if (!scrubbing) return@detectDragGesturesAfterLongPress
+                                acc += dragAmount.x
+                                // 跨过 1/3 格即切换一页，连续拖动可连翻多页
+                                while (acc >= slotPx / 3f && scrubIndex < items.size - 1) {
+                                    scrubIndex += 1; acc -= slotPx
+                                    currentOnScrub(scrubIndex)
+                                }
+                                while (acc <= -slotPx / 3f && scrubIndex > 0) {
+                                    scrubIndex -= 1; acc += slotPx
+                                    currentOnScrub(scrubIndex)
+                                }
+                            }
+                        )
+                    }
+            )
         }
     }
 }
@@ -769,7 +729,7 @@ private const val HIGHLIGHT_LIFT_SCALE = 1.25f
 private val HIGHLIGHT_W = 66.dp
 private val HIGHLIGHT_H = 48.dp
 
-/** 导航项：纯展示，点击由导航栏的指针层统一处理 */
+/** 导航项：纯展示，点击与长按由上层统一处理 */
 @Composable
 private fun NavItem(
     label: String,
