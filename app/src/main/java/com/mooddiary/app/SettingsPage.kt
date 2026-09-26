@@ -1,6 +1,9 @@
 package com.mooddiary.app
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.*
@@ -36,7 +39,10 @@ fun SettingsPage(
 ) {
     val context = LocalContext.current
     // 直接从 store collect，确保任何修改立刻反映到 UI
-    val settings by store.settings.collectAsStateWithLifecycle(initialValue = AppSettings())
+    // initialValue 必须用当前真实值（store.current()），不能用 AppSettings()。
+    // 用全默认值会让开关先渲染成"关闭"，等 Flow 发出真实值再跳到"开启"，
+    // 表现为每次进入设置页开关都重新动画一遍。
+    val settings by store.settings.collectAsStateWithLifecycle(initialValue = store.current())
 
     // 进入页面时刷新一次：用户从系统设置返回后状态会变
     var ignoringBattery by remember { mutableStateOf(Reminder.isIgnoringBatteryOptimizations(context)) }
@@ -373,10 +379,54 @@ fun SettingsPage(
 
 private fun hourText(hour: Int) = String.format(Locale.CHINA, "%02d:00", hour)
 
+/**
+ * 玻璃拟态面板：半透明底 + 双向细描边（左上受光、右下背光）+ 轻微层次，
+ * 营造磨砂玻璃质感。
+ *
+ * 说明：真正的背景模糊需要 API 31+ 的 RenderEffect，为保证低版本一致可用，
+ * 这里用「半透明填充 + 受光描边」模拟磨砂观感，所有版本表现一致。
+ */
+@Composable
+fun GlassPanel(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val scheme = MaterialTheme.colorScheme
+    val dark = scheme.surface.luminance() < 0.5f
+    // 玻璃底色：在表面色上叠一点强调色，形成若有若无的染色
+    val glass = scheme.surface.copy(alpha = if (dark) 0.72f else 0.66f)
+    val sheen = if (dark) Color.White.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.55f)
+
+    Box(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(22.dp))
+            // 受光描边：左上偏亮，模拟光从上方打下来
+            .background(
+                androidx.compose.ui.graphics.Brush.linearGradient(
+                    listOf(sheen, Color.Transparent, Color.Transparent)
+                )
+            )
+            .background(glass, RoundedCornerShape(22.dp))
+            .border(
+                1.dp,
+                androidx.compose.ui.graphics.Brush.linearGradient(
+                    listOf(
+                        Color.White.copy(alpha = if (dark) 0.22f else 0.85f),
+                        scheme.outlineVariant.copy(alpha = 0.35f),
+                        Color.White.copy(alpha = if (dark) 0.08f else 0.35f)
+                    )
+                ),
+                RoundedCornerShape(22.dp)
+            )
+    ) {
+        Column(Modifier.padding(16.dp), content = content)
+    }
+}
+
 @Composable
 private fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
-    Card(Modifier.fillMaxWidth().padding(bottom = 16.dp)) {
-        Column(Modifier.padding(16.dp)) {
+    GlassPanel(Modifier.padding(bottom = 16.dp)) {
             Text(
                 title,
                 style = MaterialTheme.typography.titleMedium,
@@ -385,7 +435,6 @@ private fun SettingsSection(title: String, content: @Composable ColumnScope.() -
             )
             Spacer(Modifier.height(12.dp))
             content()
-        }
     }
 }
 

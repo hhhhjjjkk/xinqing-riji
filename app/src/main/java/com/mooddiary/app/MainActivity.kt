@@ -659,11 +659,21 @@ fun FloatingNavBar(
         }
 
         // ① 导航栏本体（纯展示）
+        // 玻璃拟态导航条：半透明底 + 受光描边
+        val surfaceLum = MaterialTheme.colorScheme.surface.luminance()
+        val glassDark = surfaceLum < 0.5f
         Surface(
             shape = RoundedCornerShape(percent = 50),
-            color = MaterialTheme.colorScheme.surface,
+            color = MaterialTheme.colorScheme.surface.copy(alpha = if (glassDark) 0.78f else 0.72f),
             border = androidx.compose.foundation.BorderStroke(
-                1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+                1.dp,
+                androidx.compose.ui.graphics.Brush.linearGradient(
+                    listOf(
+                        Color.White.copy(alpha = if (glassDark) 0.22f else 0.85f),
+                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                        Color.White.copy(alpha = if (glassDark) 0.08f else 0.35f)
+                    )
+                )
             ),
             tonalElevation = 0.dp,
             modifier = Modifier.fillMaxWidth()
@@ -673,15 +683,24 @@ fun FloatingNavBar(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 items.forEachIndexed { idx, item ->
-                    // 光感：被按住的按钮自身发光；相邻按钮被"照亮"（描出轮廓）
-                    val lit = glowEnabled && glowIndex != null
+                    // 光感：光源按钮自身发光；其余按钮按「离光源多远」得到受光强度，
+                    // 越近越亮，隔得远几乎不受影响 —— 像光洒在旁边的东西上
+                    val src = glowIndex
+                    val litAmount = if (glowEnabled && src != null) {
+                        val d = kotlin.math.abs(idx - src)
+                        when (d) {
+                            1 -> 0.75f      // 紧邻：明显受光
+                            2 -> 0.35f      // 隔一个：微弱余光
+                            else -> 0f
+                        }
+                    } else 0f
                     NavItem(
                         label = item.first,
                         icon = item.second,
                         active = idx == activeIndex,
                         accent = accent,
-                        glowing = lit && glowIndex == idx,
-                        illuminated = lit && glowIndex != idx,
+                        glowing = glowEnabled && src == idx,
+                        litAmount = litAmount,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -807,9 +826,13 @@ private val HIGHLIGHT_H = 48.dp
 /**
  * 导航项：纯展示，点击与长按由上层统一处理。
  *
- * 沉浸光感：
- * - glowing：正在被按住，自身画一圈柔和光晕
- * - illuminated：邻近元素，被照亮——只描亮轮廓，不填充
+ * 沉浸光感（不改变任何元素尺寸，只叠加光）：
+ * - glowing：当前被按住的按钮 —— 本体发光（柔和光晕向外扩散）
+ * - litAmount：被邻近光源照亮的程度 0..1 —— 只是「被照到一点光」，
+ *   图标与文字略微提亮、并描出一圈很淡的受光轮廓
+ *
+ * 之所以不用缩放：放大导航条会破坏布局稳定感，
+ * 需求要的是「光」，不是「变大」。
  */
 @Composable
 private fun NavItem(
@@ -818,30 +841,49 @@ private fun NavItem(
     active: Boolean,
     accent: Color,
     glowing: Boolean = false,
-    illuminated: Boolean = false,
+    litAmount: Float = 0f,
     modifier: Modifier = Modifier
 ) {
-    // 光晕动画：按住时渐亮，松开渐隐
+    // 本体发光强度
     val glow by animateFloatAsState(
         targetValue = if (glowing) 1f else 0f,
-        animationSpec = tween(durationMillis = 180),
+        animationSpec = tween(durationMillis = 200),
         label = "navGlow"
     )
-    // 被照亮：轮廓渐显
+    // 被邻光照亮的程度
     val lit by animateFloatAsState(
-        targetValue = if (illuminated) 1f else 0f,
-        animationSpec = tween(durationMillis = 220),
+        targetValue = litAmount.coerceIn(0f, 1f),
+        animationSpec = tween(durationMillis = 260),
         label = "navLit"
     )
 
     Box(modifier, contentAlignment = Alignment.Center) {
-        // 光晕层：画在按钮下方（先绘制），向外扩散
-        if (glow > 0.01f) {
+        // ① 被照亮：一层极淡的受光底色（不是边框、不是放大）
+        if (lit > 0.01f) {
             Box(
                 Modifier
-                    .size(HIGHLIGHT_W * (1f + 0.35f * glow), HIGHLIGHT_H * (1f + 0.5f * glow))
-                    .graphicsLayer { alpha = glow }
-                    .blur(18.dp)
+                    .size(HIGHLIGHT_W, HIGHLIGHT_H)
+                    .graphicsLayer { alpha = lit }
+                    .background(accent.copy(alpha = 0.10f), RoundedCornerShape(percent = 50))
+            )
+        }
+
+        // ② 自身发光：多层柔光叠加，向外扩散（画在图标之下）
+        if (glow > 0.01f) {
+            // 近层：亮而小
+            Box(
+                Modifier
+                    .size(HIGHLIGHT_W * 1.10f, HIGHLIGHT_H * 1.25f)
+                    .graphicsLayer { alpha = glow * 0.85f }
+                    .blur(10.dp)
+                    .background(accent.copy(alpha = 0.70f), RoundedCornerShape(percent = 50))
+            )
+            // 远层：淡而大，形成"照亮周围"的观感
+            Box(
+                Modifier
+                    .size(HIGHLIGHT_W * 1.55f, HIGHLIGHT_H * 2.0f)
+                    .graphicsLayer { alpha = glow * 0.45f }
+                    .blur(26.dp)
                     .background(accent.copy(alpha = 0.55f), RoundedCornerShape(percent = 50))
             )
         }
@@ -851,43 +893,22 @@ private fun NavItem(
             verticalArrangement = Arrangement.Center,
             modifier = Modifier.size(HIGHLIGHT_W, HIGHLIGHT_H)
         ) {
-            Icon(
-                icon, label,
-                tint = when {
-                    active -> accent
-                    glow > 0.5f -> accent          // 被按住时图标也亮起
-                    else -> MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                modifier = Modifier
-                    .size(24.dp)
-                    .graphicsLayer {
-                        // 被照亮：只提亮轮廓感（用轻微放大+透明描边模拟）
-                        alpha = 1f
-                    }
-            )
+            // 图标：被照亮时略微提亮（用强调色混一点，而不是直接变强调色）
+            val iconTint = when {
+                active -> accent
+                glow > 0.01f -> accent
+                lit > 0.01f -> androidx.compose.ui.graphics.lerp(
+                    MaterialTheme.colorScheme.onSurfaceVariant, accent, lit * 0.55f
+                )
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            }
+            Icon(icon, label, tint = iconTint, modifier = Modifier.size(24.dp))
+
             Text(
                 label,
                 fontSize = 11.sp,
-                color = when {
-                    active -> accent
-                    glow > 0.5f -> accent
-                    else -> MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                fontWeight = if (active || glow > 0.5f) FontWeight.Bold else FontWeight.Normal
-            )
-        }
-
-        // 被照亮的轮廓：只在边缘描一圈光，不填充
-        if (lit > 0.01f) {
-            Box(
-                Modifier
-                    .size(HIGHLIGHT_W, HIGHLIGHT_H)
-                    .graphicsLayer { alpha = lit * 0.6f }
-                    .border(
-                        width = 1.dp,
-                        color = accent.copy(alpha = 0.7f),
-                        shape = RoundedCornerShape(percent = 50)
-                    )
+                color = iconTint,
+                fontWeight = if (active || glow > 0.01f) FontWeight.Bold else FontWeight.Normal
             )
         }
     }
