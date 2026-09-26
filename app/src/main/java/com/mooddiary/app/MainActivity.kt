@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -425,15 +426,19 @@ fun MoodDiaryApp(
             pageCount = { navItems.size }
         )
 
-        // 底部导航 → 滑动页：点击导航项时翻页
+        // 以 pager 为唯一数据源，避免双向同步互相打架导致卡在中间。
+        // settledPage 只在滚动真正停止（吸附完成）时更新，
+        // 因此手势滑动到一半松手也能正确落到目标页，不会卡住。
+        LaunchedEffect(pagerState) {
+            snapshotFlow { pagerState.settledPage }
+                .distinctUntilChanged()
+                .collect { page -> if (page != tab) tab = page }
+        }
+        // 点击导航项 → 翻页（仅在目标不同时才动）
         LaunchedEffect(tab) {
-            if (pagerState.currentPage != tab) {
+            if (pagerState.settledPage != tab) {
                 pagerState.animateScrollToPage(tab)
             }
-        }
-        // 滑动页 → 底部导航：手势翻页后同步选中项
-        LaunchedEffect(pagerState.currentPage) {
-            if (pagerState.currentPage != tab) tab = pagerState.currentPage
         }
 
         HorizontalPager(
@@ -1060,9 +1065,12 @@ fun MoodDialog(
     onDelete: () -> Unit
 ) {
     val context = LocalContext.current
-    var d by remember(entry, date) { mutableStateOf(date) }
-    var selected by remember(entry) { mutableIntStateOf(entry?.moodId ?: defaultMoodId) }
-    var note by remember(entry) { mutableStateOf(entry?.note ?: "") }
+    // 关键：remember 的 key 必须包含日期与小时。
+    // 否则连续打开两个都无记录的时段时（entry 均为 null），
+    // remember 不会重置，上一段输入的心情/备注会残留到下一次弹窗。
+    var d by remember(entry?.id, date) { mutableStateOf(date) }
+    var selected by remember(entry?.id, date, hour) { mutableIntStateOf(entry?.moodId ?: defaultMoodId) }
+    var note by remember(entry?.id, date, hour) { mutableStateOf(entry?.note ?: "") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
