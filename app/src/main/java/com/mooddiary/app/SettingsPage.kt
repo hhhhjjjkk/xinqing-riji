@@ -87,6 +87,7 @@ fun SettingsPage(
                                 }
                             )
                         },
+                    modifier = Modifier.pressBounce(pressedScale = 0.94f)
                     )
                 }
             }
@@ -107,6 +108,7 @@ fun SettingsPage(
                             android.widget.Toast.makeText(context, "主题色：${c.label()}", android.widget.Toast.LENGTH_SHORT).show()
                         },
                         label = { Text(c.label()) },
+                    modifier = Modifier.pressBounce(pressedScale = 0.94f)
                     )
                 }
             }
@@ -149,6 +151,7 @@ fun SettingsPage(
                             android.widget.Toast.makeText(context, "启动时打开：${t.label()}", android.widget.Toast.LENGTH_SHORT).show()
                         },
                         label = { Text(t.label()) },
+                    modifier = Modifier.pressBounce(pressedScale = 0.94f)
                     )
                 }
             }
@@ -162,11 +165,13 @@ fun SettingsPage(
                     selected = settings.calendarTapAction == CalendarTapAction.OPEN_DAY_BOARD,
                     onClick = { store.setCalendarTapAction(CalendarTapAction.OPEN_DAY_BOARD) },
                     label = { Text("展开 24 小时") },
+                modifier = Modifier.pressBounce(pressedScale = 0.94f)
                 )
                 FilterChip(
                     selected = settings.calendarTapAction == CalendarTapAction.QUICK_LOG_NOW,
                     onClick = { store.setCalendarTapAction(CalendarTapAction.QUICK_LOG_NOW) },
                     label = { Text("直接记录此刻") },
+                modifier = Modifier.pressBounce(pressedScale = 0.94f)
                 )
             }
         }
@@ -225,7 +230,10 @@ fun SettingsPage(
                         color = MaterialTheme.colorScheme.error
                     )
                     Spacer(Modifier.height(10.dp))
-                    OutlinedButton(onClick = { Reminder.openBatteryOptimizationSettings(context) }) {
+                    OutlinedButton(
+                        onClick = { Reminder.openBatteryOptimizationSettings(context) },
+                        modifier = Modifier.pressBounce(pressedScale = 0.94f)
+                    ) {
                         Text("去设置电池优化")
                     }
                 } else {
@@ -247,10 +255,13 @@ fun SettingsPage(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(10.dp))
-            OutlinedButton(onClick = {
-                android.widget.Toast.makeText(context, "已发送测试通知", android.widget.Toast.LENGTH_SHORT).show()
-                Reminder.sendNotification(context, java.time.LocalTime.now().hour)
-            }) {
+            OutlinedButton(
+                onClick = {
+                    android.widget.Toast.makeText(context, "已发送测试通知", android.widget.Toast.LENGTH_SHORT).show()
+                    Reminder.sendNotification(context, java.time.LocalTime.now().hour)
+                },
+                modifier = Modifier.pressBounce(pressedScale = 0.94f)
+            ) {
                 Text("立即弹出测试通知")
             }
         }
@@ -303,11 +314,13 @@ fun SettingsPage(
                     selected = settings.weekStart == WeekStart.SUNDAY,
                     onClick = { store.setWeekStart(WeekStart.SUNDAY); android.widget.Toast.makeText(context, "已设为周日起始", android.widget.Toast.LENGTH_SHORT).show() },
                     label = { Text("周日") },
+                modifier = Modifier.pressBounce(pressedScale = 0.94f)
                 )
                 FilterChip(
                     selected = settings.weekStart == WeekStart.MONDAY,
                     onClick = { store.setWeekStart(WeekStart.MONDAY); android.widget.Toast.makeText(context, "已设为周一起始", android.widget.Toast.LENGTH_SHORT).show() },
                     label = { Text("周一") },
+                modifier = Modifier.pressBounce(pressedScale = 0.94f)
                 )
             }
         }
@@ -325,7 +338,8 @@ fun SettingsPage(
                 onClick = { clearConfirm = true },
                 colors = ButtonDefaults.outlinedButtonColors(
                     contentColor = MaterialTheme.colorScheme.error
-                )
+                ),
+                modifier = Modifier.pressBounce(pressedScale = 0.94f)
             ) {
                 Icon(Icons.Default.DeleteForever, null)
                 Spacer(Modifier.width(6.dp))
@@ -474,7 +488,7 @@ private fun SwitchRow(
     Row(
         Modifier
             .fillMaxWidth()
-,
+            .pressBounce(pressedScale = 0.97f),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -497,7 +511,10 @@ private fun HourButton(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
-    OutlinedButton(onClick = onClick, modifier = modifier) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = modifier.pressBounce(pressedScale = 0.94f)
+    ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(hourText(hour), fontWeight = FontWeight.Bold)

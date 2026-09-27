@@ -485,7 +485,9 @@ fun MoodDiaryApp(
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.primary,
                 shadowElevation = 0.dp,
-                modifier = Modifier.size(56.dp)
+                modifier = Modifier
+                    .size(56.dp)
+                    .pressBounce()
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
@@ -585,6 +587,11 @@ fun MoodDiaryApp(
  * @param over      超出边界的原始位移（正值）
  * @param dimension 参考行程，越大越"软"
  */
+private fun rubberBandSigned(offset: Float, dimension: Float, constant: Float = 0.55f): Float {
+    val sign = if (offset < 0f) -1f else 1f
+    return sign * rubberBand(kotlin.math.abs(offset), dimension, constant)
+}
+
 private fun rubberBand(over: Float, dimension: Float, constant: Float = 0.55f): Float {
     val d = dimension.coerceAtLeast(1f)
     val abs = kotlin.math.abs(over)
@@ -713,6 +720,9 @@ fun FloatingNavBar(
         var pillX by remember { mutableFloatStateOf(0f) }
         // 导航栏跟随位移：椭圆越界时整条导航栏小幅跟动，形成"整体被拉动"的层次
         var navShift by remember { mutableFloatStateOf(0f) }
+        // 垂直方向的跟随位移（上下滑动时的 Q 弹）
+        var navShiftY by remember { mutableFloatStateOf(0f) }
+        var navShiftYJob by remember { mutableStateOf<Job?>(null) }
         var navShiftJob by remember { mutableStateOf<Job?>(null) }
         var settleJob by remember { mutableStateOf<Job?>(null) }
         var firstLayout by remember { mutableStateOf(true) }
@@ -746,6 +756,20 @@ fun FloatingNavBar(
             }
         }
 
+        fun animateNavYTo(target: Float) {
+            navShiftYJob?.cancel()
+            navShiftYJob = scope.launch {
+                animate(
+                    initialValue = navShiftY,
+                    targetValue = target,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioLowBouncy,
+                        stiffness = Spring.StiffnessMedium
+                    )
+                ) { v, _ -> navShiftY = v }
+            }
+        }
+
         LaunchedEffect(activeIndex, maxWidth) {
             if (scrubbing) return@LaunchedEffect
             val target = pillTargetPx(activeIndex)
@@ -763,8 +787,11 @@ fun FloatingNavBar(
         Box(
             Modifier
                 .fillMaxWidth()
-                // 椭圆越界时，整条导航栏小幅跟动
-                .offset(x = with(density) { navShift.toDp() })
+                // 椭圆越界 / 上下滑动时，整条导航栏小幅跟动
+                .offset(
+                    x = with(density) { navShift.toDp() },
+                    y = with(density) { navShiftY.toDp() }
+                )
                 .clip(RoundedCornerShape(percent = 50))
                 // 把导航栏当作一面真实的墙：光源处最亮，
                 // 亮度沿水平方向向左右两侧扩散衰减（而非均匀发光）
@@ -854,6 +881,9 @@ fun FloatingNavBar(
 
                                 val startPill = pillX
                                 val startX = lp.position.x
+                                val startY = lp.position.y
+                                // 垂直方向的橡皮筋行程（约半个按钮高度），限制上下位移幅度
+                                val vertRange = with(density) { HIGHLIGHT_H.toPx() } * 0.35f
                                 val minX = pillTargetPx(0)
                                 val maxX = pillTargetPx(items.size - 1)
                                 // 橡皮筋的参考行程：越大越"软"。
@@ -878,6 +908,11 @@ fun FloatingNavBar(
                                         nx > maxX -> (nx - maxX) * 0.18f
                                         else -> 0f
                                     }
+                                    // 上下滑动同样带 Q 弹：导航栏整体上下小幅位移，
+                                    // 越拉越费劲，松手弹回
+                                    navShiftY = rubberBandSigned(
+                                        ch.position.y - startY, vertRange
+                                    )
                                     pillX = nx
 
                                     // 连续页位置 → 拆成整页 + 小数偏移，
@@ -901,6 +936,7 @@ fun FloatingNavBar(
                                 glowIndex = null
                                 // 松手：椭圆、导航栏与页面各自平滑落到目标位置
                                 animateNavTo(0f)
+                                animateNavYTo(0f)
                                 currentOnScrubEnd(scrubIndex)
                                 animatePillTo(pillTargetPx(scrubIndex))
                             } else {
@@ -1591,6 +1627,46 @@ fun ReminderToggle(store: SettingsStore) {
     }
 }
 
+
+/**
+ * 按压 Q 弹（可复用于任意按钮）：按下时轻微缩小，松手用带回弹的弹簧弹回。
+ *
+ * 通过指针事件自行追踪按压，不 consume 事件，
+ * 因此不会阻断按钮自身的点击行为；也不依赖组件是否支持传入交互源。
+ */
+@Composable
+fun Modifier.pressBounce(
+    enabled: Boolean = true,
+    pressedScale: Float = 0.92f
+): Modifier {
+    var pressed by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue = if (pressed && enabled) pressedScale else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioLowBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "pressBounce"
+    )
+    return this
+        .pointerInput(enabled) {
+            if (!enabled) return@pointerInput
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false)
+                pressed = true
+                while (true) {
+                    val ev = awaitPointerEvent()
+                    val ch = ev.changes.firstOrNull() ?: break
+                    if (!ch.pressed) break
+                }
+                pressed = false
+            }
+        }
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+        }
+}
 
 private fun toast(context: android.content.Context, msg: String) =
     android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
