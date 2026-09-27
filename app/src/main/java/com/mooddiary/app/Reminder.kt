@@ -32,8 +32,6 @@ import java.util.Locale
 object Reminder {
 
     const val CHANNEL_ID = "mood_hourly_reminder"
-    private const val PREFS = "settings"
-    private const val KEY_ENABLED = "hourly_reminder"
     private const val REQ_ALARM = 9001
 
     /** 整点触发广播 */
@@ -43,17 +41,28 @@ object Reminder {
     const val EXTRA_MOOD_ID = "extra_mood_id"
     const val EXTRA_HOUR = "extra_hour"
 
-    /** 心情列表，供通知 RemoteViews 使用（和 moods 保持一致） */
-    private val NOTIFICATION_MOODS = listOf(
-        5 to "😄", 4 to "😌", 3 to "😐", 2 to "😔", 1 to "😡"
-    )
+    /**
+     * 通知里的表情按钮。按分值倒序，最多 5 个（RemoteViews 布局只有 5 个槽位）。
+     * 跟随用户自定义的心情目录，而不是写死的 5 个内置心情。
+     */
+    private fun notificationMoods(context: Context): List<Pair<Int, String>> =
+        moods.sortedByDescending { it.score }
+            .take(5)
+            .map { it.id to it.emoji }
 
+    /**
+     * 开关状态的唯一真值在 SettingsStore 的 "app_settings"（key: reminder_enabled）。
+     *
+     * 此前这里另开一个 "settings" 文件存自己的 KEY_ENABLED，与设置页写入的
+     * "app_settings" 是两份互不相干的真值：onTick 读到旧文件里的 false 就直接
+     * return，于是无论是否加入电池优化白名单都不会响。现统一读取同一份配置。
+     */
     fun isEnabled(context: Context): Boolean =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_ENABLED, false)
+        context.getSharedPreferences(SettingsStore.PREFS, Context.MODE_PRIVATE)
+            .getBoolean(SettingsStore.KEY_REMINDER, false)
 
+    /** 只负责排程/取消闹钟；开关状态本身由 SettingsStore 持有 */
     fun setEnabled(context: Context, enabled: Boolean) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putBoolean(KEY_ENABLED, enabled).apply()
         if (enabled) {
             ensureChannel(context)
             schedule(context)
@@ -178,7 +187,7 @@ object Reminder {
             R.id.notification_title,
             "现在心情怎么样？点一个表情，记录 ${String.format(Locale.CHINA, "%02d:00", hour)} 的心情"
         )
-        NOTIFICATION_MOODS.forEach { (moodId, _) ->
+        notificationMoods(context).forEach { (moodId, _) ->
             val pending = PendingIntent.getBroadcast(
                 context,
                 moodId * 100 + hour,

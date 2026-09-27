@@ -285,11 +285,18 @@ fun moodOf(id: Int): Mood =
  * @param next 新列表（已按分数或用户期望排序）
  */
 fun applyMoods(next: List<Mood>) {
-    if (next.isNotEmpty()) moods = next
+    if (next.isNotEmpty()) {
+        moods = next
+        moodEpoch++
+    }
 }
 
 /** 生成一个未被占用的心情 id */
 fun nextMoodId(): Int = (moods.maxOfOrNull { it.id } ?: 0) + 1
+
+/** 心情目录被改写的次数；统计页以它为缓存 key，保证目录变化后立即重算 */
+var moodEpoch: Int by mutableStateOf(0)
+    private set
 
 class MainActivity : ComponentActivity() {
     private val openHour = mutableStateOf<Int?>(null)
@@ -1531,8 +1538,10 @@ data class MonthStats(
     val latestByDayMap: Map<String, MoodEntry>,
     /** 每天的均分（按日升序），用于趋势图 */
     val dailyScores: List<Pair<LocalDate, Float>>,
-    /** 每种心情的占比计数 */
-    val moodCounts: Map<Int, Int>
+    /** 每种心情的计数（按“每天最新一条”计，与展示用的天数同一口径） */
+    val moodCounts: Map<Int, Int>,
+    /** 全部记录的计数（按“每天最新一条”计，避免分子分母口径不一致） */
+    val perDayCounts: Map<Int, Int>
 )
 
 /**
@@ -1546,13 +1555,10 @@ private fun computeMonthStats(entries: List<MoodEntry>, month: YearMonth): Month
     val latestByDay = HashMap<String, MoodEntry>()
     val scoreSumByDay = HashMap<String, Float>()
     val countByDay = HashMap<String, Int>()
-    val counts = HashMap<Int, Int>()
-
     for (e in entries) {
         val d = runCatching { LocalDate.parse(e.date) }.getOrNull() ?: continue
         if (YearMonth.from(d) != month) continue
         inMonth += e
-        counts[e.moodId] = (counts[e.moodId] ?: 0) + 1
 
         val prev = latestByDay[e.date]
         if (prev == null || e.hour > prev.hour) latestByDay[e.date] = e
@@ -1562,6 +1568,12 @@ private fun computeMonthStats(entries: List<MoodEntry>, month: YearMonth): Month
         countByDay[e.date] = (countByDay[e.date] ?: 0) + 1
     }
 
+    val latestList = latestByDay.values
+    // 分布与百分比以「每天最新一条」为口径，和横幅的记录天数一致，
+    // 分子分母同一基数，百分比才准
+    val perDayCounts = HashMap<Int, Int>()
+    latestList.forEach { perDayCounts[it.moodId] = (perDayCounts[it.moodId] ?: 0) + 1 }
+
     val daily = scoreSumByDay.keys
         .mapNotNull { k -> runCatching { LocalDate.parse(k) }.getOrNull() }
         .sorted()
@@ -1569,10 +1581,11 @@ private fun computeMonthStats(entries: List<MoodEntry>, month: YearMonth): Month
 
     return MonthStats(
         inMonth = inMonth,
-        latestPerDay = latestByDay.values.sortedBy { it.date },
+        latestPerDay = latestList.sortedBy { it.date },
         latestByDayMap = latestByDay,
         dailyScores = daily,
-        moodCounts = counts
+        moodCounts = perDayCounts,
+        perDayCounts = perDayCounts
     )
 }
 
@@ -1582,7 +1595,9 @@ fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) 
     // 一次遍历完成：筛出当月、并按天保留最晚一条记录。
     // 此前是 filter + groupBy + mapValues 三次遍历并产生中间集合，
     // 现在只扫一遍 entries，只保留每天的最后一条。
-    val stats = remember(entries, month) { computeMonthStats(entries, month) }
+    // moodEpoch 在自定义心情标签后自增；纳入 key 使统计随心情目录变化而重算，
+    // 修复「更新心情标签后统计停留在旧值（看似归零/不变）」的问题
+    val stats = remember(entries, month, moodEpoch) { computeMonthStats(entries, month) }
     val inMonth = stats.inMonth
     val days = stats.latestPerDay
     val accent = MaterialTheme.colorScheme.primary
@@ -1709,10 +1724,14 @@ fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) 
                             Modifier.fillMaxWidth().height(8.dp).clip(CircleShape)
                                 .background(MaterialTheme.colorScheme.surfaceVariant)
                         ) {
-                            Box(
-                                Modifier.fillMaxWidth(pct.coerceIn(0.01f, 1f)).height(8.dp)
-                                    .clip(CircleShape).background(m.color)
-                            )
+                            // 0% 就完全不画：之前 coerceIn(0.01f, 1f) 把 0 强制成
+                            // 1% 的宽度，导致占比为 0 时进度条仍有残留
+                            if (count > 0) {
+                                Box(
+                                    Modifier.fillMaxWidth(pct.coerceIn(0f, 1f)).height(8.dp)
+                                        .clip(CircleShape).background(m.color)
+                                )
+                            }
                         }
                     }
                     Text(
