@@ -485,7 +485,9 @@ fun MoodDiaryApp(
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.primary,
                 shadowElevation = 0.dp,
-                modifier = Modifier.size(56.dp)
+                modifier = Modifier
+                    .size(56.dp)
+                    .pressGlow(color = MaterialTheme.colorScheme.primary)
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
@@ -575,6 +577,45 @@ fun MoodDiaryApp(
             }
         )
     }
+}
+
+/**
+ * 把导航栏当作一面真实的墙来打光：
+ * 光源处最亮，亮度沿**水平方向**向左右两侧扩散衰减，
+ * 形成类似真实墙面受光的效果（而不是整条均匀发光）。
+ *
+ * @param centerFrac 光源在导航条上的横向位置比例 0..1
+ * @param strength   光照强度 0..1，为 0 时整条为纯表面色
+ */
+private fun wallLightBrush(
+    surface: Color,
+    light: Color,
+    centerFrac: Float,
+    strength: Float
+): androidx.compose.ui.graphics.Brush {
+    if (strength <= 0.001f) {
+        return androidx.compose.ui.graphics.Brush.horizontalGradient(
+            0f to surface, 1f to surface
+        )
+    }
+    val c = centerFrac.coerceIn(0f, 1f)
+    fun mix(f: Float) = androidx.compose.ui.graphics.lerp(
+        surface, light, (f * strength).coerceIn(0f, 1f)
+    )
+    val stops = listOf(
+        0f to surface,
+        (c - 0.40f) to surface,
+        (c - 0.20f) to mix(0.18f),
+        (c - 0.09f) to mix(0.48f),
+        c to mix(1f),
+        (c + 0.09f) to mix(0.48f),
+        (c + 0.20f) to mix(0.18f),
+        (c + 0.40f) to surface,
+        1f to surface
+    ).map { (f, col) -> f.coerceIn(0f, 1f) to col }
+        .sortedBy { it.first }
+        .distinctBy { (it.first * 1000f).toInt() }   // 保证 stop 严格递增
+    return androidx.compose.ui.graphics.Brush.horizontalGradient(*stops.toTypedArray())
 }
 
 /**
@@ -691,9 +732,18 @@ fun FloatingNavBar(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(percent = 50))
-                // 底色始终与主题一致（不做变化）；
-                // 需要变白的是图标与文字，见 NavItem
-                .background(scheme.surface, RoundedCornerShape(percent = 50))
+                // 把导航栏当作一面真实的墙：光源处最亮，
+                // 亮度沿水平方向向左右两侧扩散衰减（而非均匀发光）
+                .background(
+                    wallLightBrush(
+                        surface = scheme.surface,
+                        light = androidx.compose.ui.graphics.lerp(accent, Color.White, 0.30f),
+                        centerFrac = (pillX + pillWPx / 2f) /
+                            with(density) { maxWidth.toPx() }.coerceAtLeast(1f),
+                        strength = glowStrength * 0.30f
+                    ),
+                    RoundedCornerShape(percent = 50)
+                )
                 .border(
                     1.dp,
                     androidx.compose.ui.graphics.Brush.linearGradient(
@@ -717,8 +767,8 @@ fun FloatingNavBar(
                 items.forEachIndexed { idx, item ->
                     // 受光量：距离 0 → 1.0，距离 1 → 0.5，距离 2 → 0，再远不受影响
                     val dist = kotlin.math.abs(idx - lightCenter)
-                    // 衰减更慢：距离 0 → 1.0，1 → 0.63，2 → 0.25
-                    val light = ((2.5f - dist) / 2.5f).coerceIn(0f, 1f) * glowStrength
+                    // 只照亮相邻项：距离 0 → 1.0，1 → 0.5，2 及更远 → 0
+                    val light = ((2f - dist) / 2f).coerceIn(0f, 1f) * glowStrength
                     NavItem(
                         label = item.first,
                         icon = item.second,
@@ -1520,6 +1570,65 @@ fun ReminderToggle(store: SettingsStore) {
             else MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
+}
+
+/**
+ * 按压发光（可复用于任意按钮）：被按住时向外发出一圈光，松手渐隐。
+ *
+ * 这里用 pointerInput 自行追踪按压，而不是依赖组件是否支持传入
+ * interactionSource——这样同一个实现可以复用到添加按钮、
+ * 设置页的开关行、芯片、按钮等各种组件上。
+ *
+ * 光源即该按钮本身，光晕在其自身坐标系内绘制，不会错位。
+ */
+@Composable
+fun Modifier.pressGlow(
+    color: Color,
+    enabled: Boolean = true,
+    radius: Float = 2.0f
+): Modifier {
+    var pressed by remember { mutableStateOf(false) }
+    val g by animateFloatAsState(
+        targetValue = if (pressed && enabled) 1f else 0f,
+        animationSpec = tween(durationMillis = 180),
+        label = "pressGlow"
+    )
+    return this
+        .pointerInput(enabled) {
+            if (!enabled) return@pointerInput
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false)
+                pressed = true
+                while (true) {
+                    val ev = awaitPointerEvent()
+                    val ch = ev.changes.firstOrNull() ?: break
+                    if (!ch.pressed) break
+                }
+                pressed = false
+            }
+        }
+        .drawBehind {
+            if (g <= 0.01f) return@drawBehind
+            val cx = size.width / 2f
+            val cy = size.height / 2f
+            // 横向铺开更宽、纵向更收敛，像光落在面上向两侧扩散
+            val rw = size.width * (1f + radius * 0.75f)
+            val rh = size.height * (1f + radius * 0.45f)
+            drawRoundRect(
+                brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                    colorStops = arrayOf(
+                        0.00f to color.copy(alpha = 0.34f * g),
+                        0.40f to color.copy(alpha = 0.16f * g),
+                        1.00f to Color.Transparent
+                    ),
+                    center = Offset(cx, cy),
+                    radius = rw / 2f
+                ),
+                topLeft = Offset(cx - rw / 2f, cy - rh / 2f),
+                size = Size(rw, rh),
+                cornerRadius = CornerRadius(rh / 2f)
+            )
+        }
 }
 
 private fun toast(context: android.content.Context, msg: String) =

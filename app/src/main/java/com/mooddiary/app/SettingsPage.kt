@@ -87,6 +87,7 @@ fun SettingsPage(
                                 }
                             )
                         }
+                        modifier = Modifier.pressGlow(color = MaterialTheme.colorScheme.primary, radius = 1.4f)
                     )
                 }
             }
@@ -106,7 +107,8 @@ fun SettingsPage(
                             store.setAccentColor(c)
                             android.widget.Toast.makeText(context, "主题色：${c.label()}", android.widget.Toast.LENGTH_SHORT).show()
                         },
-                        label = { Text(c.label()) }
+                        label = { Text(c.label()) },
+                        modifier = Modifier.pressGlow(color = MaterialTheme.colorScheme.primary, radius = 1.4f)
                     )
                 }
             }
@@ -148,7 +150,8 @@ fun SettingsPage(
                             store.setStartTab(t)
                             android.widget.Toast.makeText(context, "启动时打开：${t.label()}", android.widget.Toast.LENGTH_SHORT).show()
                         },
-                        label = { Text(t.label()) }
+                        label = { Text(t.label()) },
+                        modifier = Modifier.pressGlow(color = MaterialTheme.colorScheme.primary, radius = 1.4f)
                     )
                 }
             }
@@ -161,12 +164,14 @@ fun SettingsPage(
                 FilterChip(
                     selected = settings.calendarTapAction == CalendarTapAction.OPEN_DAY_BOARD,
                     onClick = { store.setCalendarTapAction(CalendarTapAction.OPEN_DAY_BOARD) },
-                    label = { Text("展开 24 小时") }
+                    label = { Text("展开 24 小时") },
+                    modifier = Modifier.pressGlow(color = MaterialTheme.colorScheme.primary, radius = 1.4f)
                 )
                 FilterChip(
                     selected = settings.calendarTapAction == CalendarTapAction.QUICK_LOG_NOW,
                     onClick = { store.setCalendarTapAction(CalendarTapAction.QUICK_LOG_NOW) },
-                    label = { Text("直接记录此刻") }
+                    label = { Text("直接记录此刻") },
+                    modifier = Modifier.pressGlow(color = MaterialTheme.colorScheme.primary, radius = 1.4f)
                 )
             }
         }
@@ -302,12 +307,14 @@ fun SettingsPage(
                 FilterChip(
                     selected = settings.weekStart == WeekStart.SUNDAY,
                     onClick = { store.setWeekStart(WeekStart.SUNDAY); android.widget.Toast.makeText(context, "已设为周日起始", android.widget.Toast.LENGTH_SHORT).show() },
-                    label = { Text("周日") }
+                    label = { Text("周日") },
+                    modifier = Modifier.pressGlow(color = MaterialTheme.colorScheme.primary, radius = 1.4f)
                 )
                 FilterChip(
                     selected = settings.weekStart == WeekStart.MONDAY,
                     onClick = { store.setWeekStart(WeekStart.MONDAY); android.widget.Toast.makeText(context, "已设为周一起始", android.widget.Toast.LENGTH_SHORT).show() },
-                    label = { Text("周一") }
+                    label = { Text("周一") },
+                    modifier = Modifier.pressGlow(color = MaterialTheme.colorScheme.primary, radius = 1.4f)
                 )
             }
         }
@@ -472,7 +479,9 @@ private fun SwitchRow(
     onCheckedChange: (Boolean) -> Unit
 ) {
     Row(
-        Modifier.fillMaxWidth(),
+        Modifier
+            .fillMaxWidth()
+            .pressGlow(color = MaterialTheme.colorScheme.primary, radius = 1.6f),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -495,7 +504,10 @@ private fun HourButton(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
-    OutlinedButton(onClick = onClick, modifier = modifier) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = modifier.pressGlow(color = MaterialTheme.colorScheme.primary)
+    ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(hourText(hour), fontWeight = FontWeight.Bold)
