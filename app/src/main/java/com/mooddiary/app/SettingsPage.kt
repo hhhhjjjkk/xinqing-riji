@@ -678,6 +678,8 @@ fun MoodEditorDialog(
     val context = LocalContext.current
     var draft by remember { mutableStateOf(moods.toList()) }
     var editing by remember { mutableStateOf<Mood?>(null) }
+    // 在 composable 上下文里先取出，供 onClick 等非 composable 闭包使用
+    val accentColor = MaterialTheme.colorScheme.primary
 
     AlertDialog(
         onDismissRequest = onClose,
@@ -732,7 +734,7 @@ fun MoodEditorDialog(
                             id = nextMoodId(),
                             label = "新心情",
                             emoji = "🙂",
-                            color = MaterialTheme.colorScheme.primary,
+                            color = accentColor,
                             score = 3
                         )
                     },
@@ -788,6 +790,7 @@ fun MoodEditorDialog(
 }
 
 /** 单个心情的编辑表单 */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun MoodEditForm(
     mood: Mood,

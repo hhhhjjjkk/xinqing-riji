@@ -1527,6 +1527,8 @@ private fun MoodTrendChart(
 data class MonthStats(
     val inMonth: List<MoodEntry>,
     val latestPerDay: List<MoodEntry>,
+    /** 日期字符串 → 当天最后一条记录，供热力条与日历复用 */
+    val latestByDayMap: Map<String, MoodEntry>,
     /** 每天的均分（按日升序），用于趋势图 */
     val dailyScores: List<Pair<LocalDate, Float>>,
     /** 每种心情的占比计数 */
@@ -1568,6 +1570,7 @@ private fun computeMonthStats(entries: List<MoodEntry>, month: YearMonth): Month
     return MonthStats(
         inMonth = inMonth,
         latestPerDay = latestByDay.values.sortedBy { it.date },
+        latestByDayMap = latestByDay,
         dailyScores = daily,
         moodCounts = counts
     )
@@ -1738,7 +1741,7 @@ fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) 
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             (1..month.lengthOfMonth()).forEach { day ->
-                val e = latestByDay[month.atDay(day).toString()]
+                val e = stats.latestByDayMap[month.atDay(day).toString()]
                 val mood = e?.let { moodOf(it.moodId) }
                 val isToday = month.atDay(day) == LocalDate.now()
                 Box(
