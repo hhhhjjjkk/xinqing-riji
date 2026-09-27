@@ -710,6 +710,7 @@ fun FloatingNavBar(
         val slotPx = with(density) { slotW.toPx() }
         val rowPadPx = with(density) { rowPad.toPx() }
         val pillWPx = with(density) { HIGHLIGHT_W.toPx() }
+        val pillHPx = with(density) { HIGHLIGHT_H.toPx() }
         val tolPx = with(density) { 14.dp.toPx() }
 
         fun pillTargetPx(i: Int) = with(density) { (centerX(i) - HIGHLIGHT_W / 2).toPx() }
@@ -844,8 +845,14 @@ fun FloatingNavBar(
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
                             val left = pillTargetPx(currentSelected)
+                            // 命中判定必须同时约束纵向：椭圆垂直居中，
+                            // 只判断横向的话，按在导航栏上下边缘（同一列）
+                            // 也会被当作按在椭圆上，从而"平时也能上下拖"。
+                            val pillTop = (size.height - pillHPx) / 2f
                             val inEllipse = down.position.x >= left - tolPx &&
-                                down.position.x <= left + pillWPx + tolPx
+                                down.position.x <= left + pillWPx + tolPx &&
+                                down.position.y >= pillTop - tolPx &&
+                                down.position.y <= pillTop + pillHPx + tolPx
 
                             if (inEllipse) {
                                 if (showGlow) glowIndex = currentSelected
@@ -916,7 +923,7 @@ fun FloatingNavBar(
 
                                 scrubbing = false
                                 glowIndex = null
-                                // 松手：椭圆、导航栏与页面各自平滑落到目标位置
+                                // 松手：椭圆垂直回位、水平落到目标项，页面同步吸附
                                 animatePillYTo(0f)
                                 currentOnScrubEnd(scrubIndex)
                                 animatePillTo(pillTargetPx(scrubIndex))
