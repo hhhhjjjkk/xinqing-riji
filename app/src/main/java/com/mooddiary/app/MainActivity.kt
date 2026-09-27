@@ -81,7 +81,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewModelScope
 import androidx.room.*
 import androidx.room.withTransaction
@@ -343,7 +342,7 @@ class MainActivity : ComponentActivity() {
         // （固定下标 → 按分值3 → 按分值就近），同一份数据在不同版本里
         // 显示出不同的统计值——这正是「每次更新后数值都不准」的根源。
         // 把映射固化进数据库后，显示不再依赖任何兜底规则，以后永不漂移。
-        androidx.lifecycle.lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             runCatching {
                 val dao = MoodDatabase.get(applicationContext).dao()
                 val broken = dao.getAllSync().filter { e -> moods.none { m -> m.id == e.moodId } }
