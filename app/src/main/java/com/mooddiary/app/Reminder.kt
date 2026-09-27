@@ -165,6 +165,12 @@ object Reminder {
             AccentColor.GREEN -> 0xFF2E7D5B.toInt()
             AccentColor.PURPLE -> 0xFF7A4FA3.toInt()
             AccentColor.PINK -> 0xFFC2185B.toInt()
+            AccentColor.CYAN -> 0xFF00707C.toInt()
+            AccentColor.RED -> 0xFFB3261E.toInt()
+            AccentColor.INDIGO -> 0xFF3F51B5.toInt()
+            AccentColor.TEAL -> 0xFF00695C.toInt()
+            AccentColor.ORANGE -> 0xFFBF5B00.toInt()
+            AccentColor.SLATE -> 0xFF4A5C6A.toInt()
         }
         val views = RemoteViews(context.packageName, R.layout.notification_mood_chooser)
         views.setTextColor(R.id.notification_title, accentArgb)
