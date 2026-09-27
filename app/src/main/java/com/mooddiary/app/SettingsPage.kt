@@ -86,7 +86,7 @@ fun SettingsPage(
                                     ThemeMode.DARK -> "深色"
                                 }
                             )
-                        }
+                        },
                         modifier = Modifier.pressGlow(color = MaterialTheme.colorScheme.primary, radius = 1.4f)
                     )
                 }
