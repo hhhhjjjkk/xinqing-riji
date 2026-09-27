@@ -436,10 +436,16 @@ fun MoodDiaryTheme(
         )
     } else colorScheme
 
-    // 界面字号：整体等比缩放
+    // 界面字号：只缩放字号，不动 dp 换算系数。
+    //
+    // 注意：这里必须改 fontScale（只影响 sp → px），
+    // 不能改 density（会影响所有 dp → px）。
+    // 若把 density 一起放大，所有 dp 尺寸（含导航栏、椭圆尺寸、
+    // 槽位宽度）的实际像素值都会变化，而椭圆位置 pillX 是累积的像素状态，
+    // 不会随之重算，于是"调完字号后长按松手，椭圆位置出现误差"。
     val density = LocalDensity.current
     val scaledDensity = remember(density, fontLevel) {
-        Density(density.density * fontLevel.scale(), density.fontScale)
+        Density(density.density, density.fontScale * fontLevel.scale())
     }
 
     CompositionLocalProvider(LocalDensity provides scaledDensity) {
@@ -824,7 +830,8 @@ fun FloatingNavBar(
             }
         }
 
-        LaunchedEffect(activeIndex, maxWidth) {
+        // pillWPx 随密度变化，纳入 key 可在尺寸变化时重新校准椭圆位置
+        LaunchedEffect(activeIndex, maxWidth, pillWPx) {
             if (scrubbing) return@LaunchedEffect
             val target = pillTargetPx(activeIndex)
             if (firstLayout) {
