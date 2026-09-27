@@ -626,11 +626,12 @@ private fun wallLightBrush(
  *   ② 单一指针层 —— 铺满导航栏且静止，处理点击与长按拖动
  *   ③ 高光椭圆 —— 光源本体，光晕在其自身坐标系内绘制（不会错位）
  *
- * 光效：
- * - 椭圆向外发出柔光（径向渐变，Android 7+ 全兼容，不用 blur）
- * - 被光照到的相邻项目会**变亮并被染上光的颜色**——
- *   受光量按与光源的距离衰减计算，越近越亮、染色越明显，
- *   这是"光照射到物体上"的效果，而不是物体自己发光
+ * 光效（椭圆本身不绘制向外散发的独立光圈）：
+ * - 椭圆作为光源，其亮度体现在导航栏这面「墙」上：
+ *   墙面在光源处最亮，沿水平方向向左右两侧扩散衰减
+ * - 被光照到的相邻项目会变白并被染上光的颜色——
+ *   受光量按与光源的距离衰减，只作用于相邻项
+ * - 光照由墙面与被照亮元素本身呈现，而非叠一圈光环
  *
  * 拖动时的页面跟随：
  * 通过 scrollToPage(page, fraction) 传入**小数偏移**，
@@ -872,37 +873,14 @@ fun FloatingNavBar(
             )
         }
 
-        // ③ 高光椭圆：光源本体（光晕在本坐标系内绘制，与椭圆天然对齐）
+        // ③ 高光椭圆：光源本体。
+        // 不再绘制向外散发的独立光圈——光照效果由导航栏「墙面」与
+        // 被照亮元素本身呈现（见 wallLightBrush 与 NavItem）。
         Box(
             Modifier
                 .align(Alignment.CenterStart)
                 .offset(x = with(density) { pillX.toDp() }, y = 0.dp)
                 .size(HIGHLIGHT_W, HIGHLIGHT_H)
-                .drawBehind {
-                    val g = glowStrength
-                    if (g <= 0.01f) return@drawBehind
-                    val cx = size.width / 2f
-                    val cy = size.height / 2f
-                    val rw = size.width * 1.45f
-                    val rh = size.height * 1.8f
-                    drawRoundRect(
-                        brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                            // 颜色更深：以强调色为基础加深饱和度再提亮，
-                            // 亮度更高：整体 alpha 提升
-                            colorStops = arrayOf(
-                                0.00f to deepLight(accent, 0.72f * g),
-                                0.35f to deepLight(accent, 0.46f * g),
-                                0.62f to deepLight(accent, 0.20f * g),
-                                1.00f to Color.Transparent
-                            ),
-                            center = Offset(cx, cy),
-                            radius = rw / 2f
-                        ),
-                        topLeft = Offset(cx - rw / 2f, cy - rh / 2f),
-                        size = Size(rw, rh),
-                        cornerRadius = CornerRadius(rh / 2f)
-                    )
-                }
                 .graphicsLayer {
                     scaleX = highlightScale
                     scaleY = highlightScale
@@ -931,16 +909,6 @@ private class ShortLongPressViewConfiguration(
     override val longPressTimeoutMillis: Long get() = 250L
 }
 
-/**
- * 把光源色加深并提亮，用于绘制更浓、更亮的光晕。
- * 先降低亮度让颜色更「深」，再向白色提亮让光更「亮」，
- * 最后把 alpha 拉满，保证光的浓度。
- */
-private fun deepLight(color: Color, alpha: Float): Color {
-    val deeper = androidx.compose.ui.graphics.lerp(color, Color.Black, 0.22f)
-    val brighter = androidx.compose.ui.graphics.lerp(deeper, Color.White, 0.30f)
-    return brighter.copy(alpha = alpha.coerceIn(0f, 1f))
-}
 
 /**
  * 导航项。
