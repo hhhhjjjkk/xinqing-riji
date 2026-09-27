@@ -275,10 +275,31 @@ var moods by mutableStateOf(defaultMoods)
     private set
 
 /** 历史记录里可能引用了已被删除的心情，此时回退到最接近的一个 */
-fun moodOf(id: Int): Mood =
-    moods.firstOrNull { it.id == id }
-        ?: moods.firstOrNull { it.score == 3 }
-        ?: moods[moods.size / 2]
+/**
+ * 按 id 取心情。
+ *
+ * 历史记录可能引用已被删除/重建的心情 id。此时**不能**把所有失配 id
+ * 都归到同一个兜底项——否则统计分布里那一个会独占 100%，
+ * 其余全是 0（正是「我选哪个哪个就是 100%」的另一面）。
+ *
+ * 改为按分值就近回退：用失配 id 在「默认目录」中的分值，
+ * 找当前目录里分值最接近的那个。若目录为空再回退到居中项。
+ */
+fun moodOf(id: Int): Mood = moodOfIn(id, moods, defaultMoods)
+
+/** [moodOf] 的纯函数版本：显式传入目录，便于单元测试 */
+internal fun moodOfIn(id: Int, catalog: List<Mood>, defaults: List<Mood>): Mood {
+    catalog.firstOrNull { it.id == id }?.let { return it }
+
+    // 用默认目录推断该 id 原本的分值，再就近匹配当前目录
+    val originalScore = defaults.firstOrNull { it.id == id }?.score
+    if (originalScore != null) {
+        catalog.minByOrNull { kotlin.math.abs(it.score - originalScore) }?.let { return it }
+    }
+
+    // 目录为空等极端情况：返回占位项，绝不抛异常
+    return catalog.firstOrNull() ?: Mood(0, "未知", "•", Color.Gray, 3)
+}
 
 /**
  * 应用一份新的心情目录。

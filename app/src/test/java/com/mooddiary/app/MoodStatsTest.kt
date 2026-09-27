@@ -82,3 +82,38 @@ class MoodStatsTest {
         assertEquals(3.0f, st.dailyScores.first().second, 0.001f)
     }
 }
+
+
+class MoodFallbackTest {
+
+    /** 失配 id 的兜底不能把所有记录归到同一个心情 */
+    @Test
+    fun `失配的历史id按分值就近回退而不是全部归到同一个`() {
+        val custom = listOf(
+            Mood(6, "甲", "🙂", Color(0xFF26A69A), 4),
+            Mood(7, "乙", "🙂", Color(0xFF7E57C2), 3),
+            Mood(8, "丙", "🙂", Color(0xFFEC407A), 2)
+        )
+
+        val mapped = listOf(5, 4, 3, 2, 1).map { moodOfIn(it, custom, defaultMoods) }
+
+        // 旧逻辑会把 5 个全部归到乙（score==3 的那个）→ 分布 100%
+        // 新逻辑按分值就近，至少应映射到 2 个以上不同的心情
+        assertTrue("兜底把所有历史归到了同一个心情：${mapped.map { it.label }}",
+            mapped.map { it.id }.distinct().size >= 2)
+    }
+
+    /** 正常命中不受影响 */
+    @Test
+    fun `目录中存在的id直接命中`() {
+        val custom = listOf(Mood(9, "甲", "🙂", Color(0xFF26A69A), 5))
+        assertEquals("甲", moodOfIn(9, custom, defaultMoods).label)
+    }
+
+    /** 目录为空时不抛异常 */
+    @Test
+    fun `目录为空时返回占位而不崩溃`() {
+        val m = moodOfIn(5, emptyList(), defaultMoods)
+        assertEquals("未知", m.label)
+    }
+}
