@@ -72,15 +72,17 @@ class MoodStatsTest {
     }
 
     @Test
-    fun `日均分使用当天全部记录而非仅最后一条`() {
-        // 同一天：开心(5) 与 生气(1) → 日均分 3.0
+    fun `趋势日均分与分布使用同一口径`() {
+        // 同一天：10 点开心(5)、20 点生气(1)。当天最新一条是生气(1)，
+        // 全页统一口径后，趋势分应为 1 而不是均值 3，
+        // 这样趋势、分布、横幅三个数字之间才不会互相矛盾。
         val entries = listOf(
             entry(LocalDate.of(2026, 9, 26), 10, 5),
             entry(LocalDate.of(2026, 9, 26), 20, 1)
         )
         val st = compute(entries)
         assertEquals(1, st.dailyScores.size)
-        assertEquals(3.0f, st.dailyScores.first().second, 0.001f)
+        assertEquals(1.0f, st.dailyScores.first().second, 0.001f)
     }
 }
 
@@ -116,5 +118,51 @@ class MoodFallbackTest {
     fun `目录为空时返回占位而不崩溃`() {
         val m = moodOfIn(5, emptyList(), defaultMoods)
         assertEquals("未知", m.label)
+    }
+}
+
+
+class MoodDataRepairTest {
+
+    /**
+     * 一次性修复的映射必须**确定性**：同样的失配数据，
+     * 无论跑多少次、哪个版本跑，得到的修正结果都相同。
+     * （此前兜底规则逐版变化，导致统计数值随版本漂移。）
+     */
+    @Test
+    fun `失配id的修复映射是确定性的`() {
+        val catalog = listOf(
+            Mood(6, "甲", "🙂", Color(0xFF26A69A), 4),
+            Mood(7, "乙", "🙂", Color(0xFF7E57C2), 3),
+            Mood(8, "丙", "🙂", Color(0xFFEC407A), 2)
+        )
+        val broken = listOf(5, 4, 3, 2, 1).map { id ->
+            MoodEntry(date = "2026-09-26", hour = id, moodId = id)
+        }
+
+        // 修复 = moodOfIn(id, catalog).id
+        val repaired = broken.map { e -> moodOfIn(e.moodId, catalog, defaultMoods).id }
+
+        // 同一输入再算一遍，结果必须完全一致（幂等且确定）
+        val again = broken.map { e -> moodOfIn(e.moodId, catalog, defaultMoods).id }
+        assertEquals(repaired, again)
+
+        // 修复后的 id 必须都存在于当前目录（数据不再失配）
+        repaired.forEach { id ->
+            assertTrue(catalog.any { it.id == id })
+        }
+    }
+
+    /** 修复必须分散，不得把全部记录归到同一个心情 */
+    @Test
+    fun `修复后不得全部归到同一个心情`() {
+        val catalog = listOf(
+            Mood(6, "甲", "🙂", Color(0xFF26A69A), 4),
+            Mood(7, "乙", "🙂", Color(0xFF7E57C2), 3),
+            Mood(8, "丙", "🙂", Color(0xFFEC407A), 2)
+        )
+        val repaired = listOf(5, 4, 3, 2, 1).map { id -> moodOfIn(id, catalog, defaultMoods).id }
+        assertTrue("修复把所有记录归到了同一项：${repaired.distinct()}",
+            repaired.distinct().size >= 2)
     }
 }

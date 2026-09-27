@@ -81,6 +81,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewModelScope
 import androidx.room.*
 import androidx.room.withTransaction
@@ -131,6 +132,10 @@ interface MoodDao {
     /** 同步版本：供 BroadcastReceiver 在 IO 线程调用（suspend 不便在 goAsync 里用） */
     @Query("SELECT id FROM mood_entries WHERE date = :date AND hour = :hour LIMIT 1")
     fun findByDateHourSync(date: String, hour: Int): Long?
+
+    /** 全量同步读取：启动时做一次性数据修复用 */
+    @Query("SELECT * FROM mood_entries")
+    fun getAllSync(): List<MoodEntry>
 
     /** ABORT：冲突时抛异常而不是替换，配合上层显式冲突处理，避免静默丢数据 */
     @Insert(onConflict = OnConflictStrategy.ABORT)
@@ -330,6 +335,23 @@ class MainActivity : ComponentActivity() {
         store.syncReminder()
         // 启动时载入用户自定义的心情目录（未自定义则沿用内置默认）
         MoodCatalog.load(this)?.let { applyMoods(it) }
+        // 一次性数据修复：把引用了已删除心情的记录，永久改写为当前目录中
+        // 就近的心情 id。
+        //
+        // 为什么必须写库而不是只在显示时兜底：
+        // 此前失配只发生在「读取映射」（moodOf 的兜底），而兜底规则改过几次
+        // （固定下标 → 按分值3 → 按分值就近），同一份数据在不同版本里
+        // 显示出不同的统计值——这正是「每次更新后数值都不准」的根源。
+        // 把映射固化进数据库后，显示不再依赖任何兜底规则，以后永不漂移。
+        androidx.lifecycle.lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val dao = MoodDatabase.get(applicationContext).dao()
+                val broken = dao.getAllSync().filter { e -> moods.none { m -> m.id == e.moodId } }
+                broken.forEach { e ->
+                    dao.update(e.copy(moodId = moodOf(e.moodId).id))
+                }
+            }
+        }
         setContent {
             val settings by store.settings.collectAsStateWithLifecycle(initialValue = store.current())
             MoodDiaryTheme(
@@ -1574,8 +1596,6 @@ data class MonthStats(
 internal fun computeMonthStats(entries: List<MoodEntry>, month: YearMonth): MonthStats {
     val inMonth = ArrayList<MoodEntry>()
     val latestByDay = HashMap<String, MoodEntry>()
-    val scoreSumByDay = HashMap<String, Float>()
-    val countByDay = HashMap<String, Int>()
     for (e in entries) {
         val d = runCatching { LocalDate.parse(e.date) }.getOrNull() ?: continue
         if (YearMonth.from(d) != month) continue
@@ -1583,26 +1603,23 @@ internal fun computeMonthStats(entries: List<MoodEntry>, month: YearMonth): Mont
 
         val prev = latestByDay[e.date]
         if (prev == null || e.hour > prev.hour) latestByDay[e.date] = e
-
-        // 均分按全部记录计算（含同一天的多条），更能反映真实情绪
-        scoreSumByDay[e.date] = (scoreSumByDay[e.date] ?: 0f) + moodOf(e.moodId).score
-        countByDay[e.date] = (countByDay[e.date] ?: 0) + 1
     }
 
-    val latestList = latestByDay.values
-    // 分布与百分比以「每天最新一条」为口径，和横幅的记录天数一致，
-    // 分子分母同一基数，百分比才准
+    // —— 全页唯一口径：每天只取「最新一条」——
+    // 分布计数、记录天数、趋势图日均分、横幅平均分，全部来自这一份数据，
+    // 页面上任何两个数字之间都不会再出现矛盾。
+    // （此前趋势图按「当天全部记录平均」，而横幅/分布按「每天最新一条」，
+    //   同一页两套口径，数字互相打架。）
+    val latestList = latestByDay.values.sortedBy { it.date }
+
     val perDayCounts = HashMap<Int, Int>()
     latestList.forEach { perDayCounts[it.moodId] = (perDayCounts[it.moodId] ?: 0) + 1 }
 
-    val daily = scoreSumByDay.keys
-        .mapNotNull { k -> runCatching { LocalDate.parse(k) }.getOrNull() }
-        .sorted()
-        .map { d -> d to (scoreSumByDay[d.toString()]!! / countByDay[d.toString()]!!) }
+    val daily = latestList.map { e -> runCatching { LocalDate.parse(e.date) }.getOrNull()!! to moodOf(e.moodId).score.toFloat() }
 
     return MonthStats(
         inMonth = inMonth,
-        latestPerDay = latestList.sortedBy { it.date },
+        latestPerDay = latestList,
         latestByDayMap = latestByDay,
         dailyScores = daily,
         moodCounts = perDayCounts,
@@ -1646,7 +1663,9 @@ fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) 
 
         val avg = days.map { moodOf(it.moodId).score }.average()
         // 占比最高的心情
-        val topMood = moods.maxByOrNull { m -> days.count { it.moodId == m.id } }
+        // 直接用预计算的计数，不再重复遍历
+        val topMood = stats.perDayCounts.maxByOrNull { it.value }
+            ?.let { (id, _) -> moodOf(id) }
 
         // 主色横幅：一眼看到这个月的概况
         Box(
@@ -1660,7 +1679,7 @@ fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) 
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        "${topMood!!.emoji} 主要情绪是${topMood.label}",
+                        "${topMood?.emoji ?: "•"} 主要情绪是${topMood?.label ?: "—"}",
                         color = onAccent, fontWeight = FontWeight.Bold, fontSize = 18.sp
                     )
                     Spacer(Modifier.height(6.dp))
