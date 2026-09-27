@@ -94,6 +94,7 @@ import java.time.LocalTime
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.pow
 import kotlin.math.roundToInt
 
 /** 备注长度上限，防止超长文本整段进内存与数据库 */
