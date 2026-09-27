@@ -17,12 +17,33 @@ enum class WeekStart { SUNDAY, MONDAY }
 
 /** 主题强调色预设 */
 enum class AccentColor {
-    AMBER, BLUE, GREEN, PURPLE, PINK;
+    AMBER, BLUE, GREEN, PURPLE, PINK,
+    CYAN, RED, INDIGO, TEAL, ORANGE, SLATE;
 
     fun label() = when (this) {
         AMBER -> "琥珀"; BLUE -> "静蓝"; GREEN -> "青绿"
         PURPLE -> "紫罗兰"; PINK -> "樱粉"
+        CYAN -> "青碧"; RED -> "赤霞"; INDIGO -> "靛青"
+        TEAL -> "松绿"; ORANGE -> "暖橙"; SLATE -> "雾灰"
     }
+}
+
+/** 光效强度 */
+enum class GlowLevel { SOFT, NORMAL, STRONG;
+    fun label() = when (this) { SOFT -> "柔和"; NORMAL -> "标准"; STRONG -> "明亮" }
+    fun factor() = when (this) { SOFT -> 0.65f; NORMAL -> 1f; STRONG -> 1.45f }
+}
+
+/** 卡片圆角 */
+enum class CornerLevel { SMALL, NORMAL, LARGE;
+    fun label() = when (this) { SMALL -> "小"; NORMAL -> "标准"; LARGE -> "大" }
+    fun dp() = when (this) { SMALL -> 12; NORMAL -> 22; LARGE -> 30 }
+}
+
+/** 界面字号 */
+enum class FontLevel { SMALL, NORMAL, LARGE;
+    fun label() = when (this) { SMALL -> "小"; NORMAL -> "标准"; LARGE -> "大" }
+    fun scale() = when (this) { SMALL -> 0.88f; NORMAL -> 1f; LARGE -> 1.18f }
 }
 
 /** 启动默认页 */
@@ -51,7 +72,17 @@ data class AppSettings(
     val quietStart: Int = 22,
     val quietEnd: Int = 8,
     val defaultMoodId: Int = 5,
-    val weekStart: WeekStart = WeekStart.SUNDAY
+    val weekStart: WeekStart = WeekStart.SUNDAY,
+    /** 光效强度 */
+    val glowLevel: GlowLevel = GlowLevel.NORMAL,
+    /** 卡片圆角大小 */
+    val cornerLevel: CornerLevel = CornerLevel.NORMAL,
+    /** 界面字号 */
+    val fontLevel: FontLevel = FontLevel.NORMAL,
+    /** 深色模式下使用纯黑背景（OLED 更省电） */
+    val pureBlack: Boolean = false,
+    /** 日历格子上显示心情表情 */
+    val calendarShowEmoji: Boolean = true
 )
 
 object QuietHours {
@@ -94,6 +125,11 @@ class SettingsStore(context: Context) {
         calendarTapAction = CalendarTapAction.entries
             .getOrElse(prefs.getInt(KEY_CAL_TAP, 0)) { CalendarTapAction.OPEN_DAY_BOARD },
         immersiveGlow = prefs.getBoolean(KEY_GLOW, true),
+        glowLevel = GlowLevel.entries.getOrElse(prefs.getInt(KEY_GLOW_LEVEL, 1)) { GlowLevel.NORMAL },
+        cornerLevel = CornerLevel.entries.getOrElse(prefs.getInt(KEY_CORNER, 1)) { CornerLevel.NORMAL },
+        fontLevel = FontLevel.entries.getOrElse(prefs.getInt(KEY_FONT, 1)) { FontLevel.NORMAL },
+        pureBlack = prefs.getBoolean(KEY_PURE_BLACK, false),
+        calendarShowEmoji = prefs.getBoolean(KEY_CAL_EMOJI, true),
         reminderEnabled = prefs.getBoolean(KEY_REMINDER, false),
         quietHoursEnabled = prefs.getBoolean(KEY_QUIET_ENABLED, false),
         quietStart = prefs.getInt(KEY_QUIET_START, 22),
@@ -113,6 +149,11 @@ class SettingsStore(context: Context) {
     fun setCalendarShowNote(enabled: Boolean) = commit { putBoolean(KEY_CAL_NOTE, enabled) }
     fun setCalendarTapAction(action: CalendarTapAction) = commit { putInt(KEY_CAL_TAP, action.ordinal) }
     fun setImmersiveGlow(enabled: Boolean) = commit { putBoolean(KEY_GLOW, enabled) }
+    fun setGlowLevel(level: GlowLevel) = commit { putInt(KEY_GLOW_LEVEL, level.ordinal) }
+    fun setCornerLevel(level: CornerLevel) = commit { putInt(KEY_CORNER, level.ordinal) }
+    fun setFontLevel(level: FontLevel) = commit { putInt(KEY_FONT, level.ordinal) }
+    fun setPureBlack(enabled: Boolean) = commit { putBoolean(KEY_PURE_BLACK, enabled) }
+    fun setCalendarShowEmoji(enabled: Boolean) = commit { putBoolean(KEY_CAL_EMOJI, enabled) }
     fun setReminderEnabled(enabled: Boolean) {
         commit { putBoolean(KEY_REMINDER, enabled) }
         Reminder.setEnabled(appContext, enabled)
@@ -146,6 +187,11 @@ class SettingsStore(context: Context) {
         private const val KEY_CAL_NOTE = "calendar_show_note"
         private const val KEY_CAL_TAP = "calendar_tap_action"
         private const val KEY_GLOW = "immersive_glow"
+        private const val KEY_GLOW_LEVEL = "glow_level"
+        private const val KEY_CORNER = "corner_level"
+        private const val KEY_FONT = "font_level"
+        private const val KEY_PURE_BLACK = "pure_black"
+        private const val KEY_CAL_EMOJI = "calendar_show_emoji"
     }
 }
 

@@ -15,6 +15,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.animateFloatAsState
@@ -71,6 +72,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -277,7 +279,9 @@ class MainActivity : ComponentActivity() {
             MoodDiaryTheme(
                 themeMode = settings.themeMode,
                 accentColor = settings.accentColor,
-                useDynamicColor = settings.useDynamicColor
+                useDynamicColor = settings.useDynamicColor,
+                pureBlack = settings.pureBlack,
+                fontLevel = settings.fontLevel
             ) {
                 MoodDiaryApp(
                     openHour = openHour,
@@ -346,6 +350,43 @@ private val ACCENTS: Map<AccentColor, AccentScheme> = mapOf(
         lightContainer = 0xFFFFD9E2, lightOnContainer = 0xFF3E001D,
         darkPrimary = 0xFFFF8CA8, darkOnPrimary = 0xFF5E1130,
         darkContainer = 0xFF732945, darkOnContainer = 0xFFFFD9E2
+    ),
+    // —— 以下为新增主题色 ——
+    AccentColor.CYAN to AccentScheme(
+        lightPrimary = 0xFF00707C, lightOnPrimary = 0xFFFFFFFF,
+        lightContainer = 0xFFAAEDF8, lightOnContainer = 0xFF001F24,
+        darkPrimary = 0xFF4FD8E8, darkOnPrimary = 0xFF00363D,
+        darkContainer = 0xFF004F58, darkOnContainer = 0xFFAAEDF8
+    ),
+    AccentColor.RED to AccentScheme(
+        lightPrimary = 0xFFB3261E, lightOnPrimary = 0xFFFFFFFF,
+        lightContainer = 0xFFFFDAD6, lightOnContainer = 0xFF410E0B,
+        darkPrimary = 0xFFFFB4AB, darkOnPrimary = 0xFF690005,
+        darkContainer = 0xFF93000A, darkOnContainer = 0xFFFFDAD6
+    ),
+    AccentColor.INDIGO to AccentScheme(
+        lightPrimary = 0xFF3F51B5, lightOnPrimary = 0xFFFFFFFF,
+        lightContainer = 0xFFE0E4FF, lightOnContainer = 0xFF00105C,
+        darkPrimary = 0xFFB6C4FF, darkOnPrimary = 0xFF00218B,
+        darkContainer = 0xFF2331A8, darkOnContainer = 0xFFE0E4FF
+    ),
+    AccentColor.TEAL to AccentScheme(
+        lightPrimary = 0xFF00695C, lightOnPrimary = 0xFFFFFFFF,
+        lightContainer = 0xFFA7F0E0, lightOnContainer = 0xFF00201A,
+        darkPrimary = 0xFF5FDBC4, darkOnPrimary = 0xFF003730,
+        darkContainer = 0xFF005046, darkOnContainer = 0xFFA7F0E0
+    ),
+    AccentColor.ORANGE to AccentScheme(
+        lightPrimary = 0xFFBF5B00, lightOnPrimary = 0xFFFFFFFF,
+        lightContainer = 0xFFFFDCC2, lightOnContainer = 0xFF341100,
+        darkPrimary = 0xFFFFB77C, darkOnPrimary = 0xFF552000,
+        darkContainer = 0xFF7A3200, darkOnContainer = 0xFFFFDCC2
+    ),
+    AccentColor.SLATE to AccentScheme(
+        lightPrimary = 0xFF4A5C6A, lightOnPrimary = 0xFFFFFFFF,
+        lightContainer = 0xFFD5E4F3, lightOnContainer = 0xFF0D1D28,
+        darkPrimary = 0xFFB6C8D9, darkOnPrimary = 0xFF1E2F3C,
+        darkContainer = 0xFF354755, darkOnContainer = 0xFFD5E4F3
     )
 )
 
@@ -354,6 +395,8 @@ fun MoodDiaryTheme(
     themeMode: ThemeMode = ThemeMode.SYSTEM,
     accentColor: AccentColor = AccentColor.AMBER,
     useDynamicColor: Boolean = false,
+    pureBlack: Boolean = false,
+    fontLevel: FontLevel = FontLevel.NORMAL,
     content: @Composable () -> Unit
 ) {
     val dark = shouldUseDarkTheme(themeMode)
@@ -383,7 +426,25 @@ fun MoodDiaryTheme(
         }
     }
 
-    MaterialTheme(colorScheme = colorScheme, content = content)
+    // 纯黑背景：深色模式下把 surface/background 压成纯黑（OLED 省电）
+    val finalScheme = if (pureBlack && dark) {
+        colorScheme.copy(
+            background = Color.Black,
+            surface = Color.Black,
+            surfaceVariant = Color(0xFF101012),
+            surfaceContainerLow = Color(0xFF0A0A0C)
+        )
+    } else colorScheme
+
+    // 界面字号：整体等比缩放
+    val density = LocalDensity.current
+    val scaledDensity = remember(density, fontLevel) {
+        Density(density.density * fontLevel.scale(), density.fontScale)
+    }
+
+    CompositionLocalProvider(LocalDensity provides scaledDensity) {
+        MaterialTheme(colorScheme = finalScheme, content = content)
+    }
 }
 
 /** 待用户确认的覆盖请求 */
@@ -475,7 +536,8 @@ fun MoodDiaryApp(
                 onScrubEnd = { page ->
                     scope.launch { pagerState.animateScrollToPage(page) }
                 },
-                showGlow = settings.immersiveGlow
+                showGlow = settings.immersiveGlow,
+                glowFactor = settings.glowLevel.factor()
             )
         },
         // 添加按钮回到右下角，但保留胶囊形状
@@ -514,6 +576,7 @@ fun MoodDiaryApp(
                     month, entries,
                     weekStart = settings.weekStart,
                     showNote = settings.calendarShowNote,
+                    showEmoji = settings.calendarShowEmoji,
                     setMonth = { month = it },
                     open = { d ->
                         when (settings.calendarTapAction) {
@@ -668,7 +731,8 @@ fun FloatingNavBar(
     onSelect: (Int) -> Unit,
     onScrub: (page: Int, fraction: Float) -> Unit,
     onScrubEnd: (page: Int) -> Unit,
-    showGlow: Boolean = true
+    showGlow: Boolean = true,
+    glowFactor: Float = 1f
 ) {
     val density = androidx.compose.ui.platform.LocalDensity.current
     val haptic = LocalHapticFeedback.current
@@ -794,7 +858,7 @@ fun FloatingNavBar(
                         centerFrac = (pillX + pillWPx / 2f) /
                             with(density) { maxWidth.toPx() }.coerceAtLeast(1f),
                         // 浅色底上同样的强度会更不明显，适当加强
-                        strength = glowStrength * if (glassDark) 0.30f else 0.42f
+                        strength = glowStrength * (if (glassDark) 0.30f else 0.42f) * glowFactor
                     ),
                     RoundedCornerShape(percent = 50)
                 )
@@ -1118,6 +1182,7 @@ fun CalendarPage(
     entries: List<MoodEntry>,
     weekStart: WeekStart = WeekStart.SUNDAY,
     showNote: Boolean = false,
+    showEmoji: Boolean = true,
     setMonth: (YearMonth) -> Unit,
     open: (LocalDate) -> Unit
 ) {
@@ -1173,7 +1238,8 @@ fun CalendarPage(
                             CalendarCell(
                                 d, latestByDay[d.toString()],
                                 today = d == LocalDate.now(),
-                                showNote = showNote
+                                showNote = showNote,
+                                showEmoji = showEmoji
                             ) { open(d) }
                         }
                     }
@@ -1196,6 +1262,7 @@ fun CalendarCell(
     entry: MoodEntry?,
     today: Boolean,
     showNote: Boolean = false,
+    showEmoji: Boolean = true,
     click: () -> Unit
 ) {
     val mood = entry?.let { moodOf(it.moodId) }
@@ -1220,7 +1287,7 @@ fun CalendarCell(
                 color = textColor,
                 fontWeight = if (today) FontWeight.Bold else FontWeight.Normal
             )
-            if (mood != null) Text(mood.emoji, fontSize = 15.sp)
+            if (mood != null && showEmoji) Text(mood.emoji, fontSize = 15.sp)
             // 可选：在格子里显示备注摘要
             if (showNote && entry != null && entry.note.isNotBlank()) {
                 Text(

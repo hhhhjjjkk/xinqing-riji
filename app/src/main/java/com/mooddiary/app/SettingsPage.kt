@@ -68,7 +68,7 @@ fun SettingsPage(
             .padding(16.dp)
     ) {
         // 外观
-        SettingsSection("外观") {
+        SettingsSection("外观", cornerDp = settings.cornerLevel.dp()) {
             SettingLabel("主题模式")
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -94,7 +94,7 @@ fun SettingsPage(
         }
 
         // 个性化：主题色 / 动态取色
-        SettingsSection("个性化") {
+        SettingsSection("个性化", cornerDp = settings.cornerLevel.dp()) {
             SettingLabel("主题色")
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -134,10 +134,69 @@ fun SettingsPage(
                 checked = settings.immersiveGlow,
                 onCheckedChange = { store.setImmersiveGlow(it) }
             )
+
+            // 光效强度：仅在开启光感时可用
+            if (settings.immersiveGlow) {
+                Spacer(Modifier.height(10.dp))
+                SettingLabel("光效强度")
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    GlowLevel.entries.forEach { lv ->
+                        FilterChip(
+                            selected = settings.glowLevel == lv,
+                            onClick = { store.setGlowLevel(lv) },
+                            label = { Text(lv.label()) },
+                            modifier = Modifier.pressBounce(pressedScale = 0.94f)
+                        )
+                    }
+                }
+            }
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            SettingLabel("卡片圆角")
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                CornerLevel.entries.forEach { lv ->
+                    FilterChip(
+                        selected = settings.cornerLevel == lv,
+                        onClick = { store.setCornerLevel(lv) },
+                        label = { Text(lv.label()) },
+                        modifier = Modifier.pressBounce(pressedScale = 0.94f)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            SettingLabel("界面字号")
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FontLevel.entries.forEach { lv ->
+                    FilterChip(
+                        selected = settings.fontLevel == lv,
+                        onClick = { store.setFontLevel(lv) },
+                        label = { Text(lv.label()) },
+                        modifier = Modifier.pressBounce(pressedScale = 0.94f)
+                    )
+                }
+            }
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            SwitchRow(
+                title = "纯黑背景",
+                subtitle = "深色模式下使用纯黑，OLED 屏幕更省电",
+                checked = settings.pureBlack,
+                onCheckedChange = { store.setPureBlack(it) }
+            )
         }
 
         // 启动与操作习惯
-        SettingsSection("启动与操作") {
+        SettingsSection("启动与操作", cornerDp = settings.cornerLevel.dp()) {
             SettingLabel("启动时打开")
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -177,7 +236,7 @@ fun SettingsPage(
         }
 
         // 提醒
-        SettingsSection("提醒") {
+        SettingsSection("提醒", cornerDp = settings.cornerLevel.dp()) {
             SwitchRow(
                 title = "每小时提醒",
                 subtitle = "整点提醒你记录当下的心情",
@@ -216,7 +275,7 @@ fun SettingsPage(
 
         // 提醒可靠性
         if (settings.reminderEnabled) {
-            SettingsSection("提醒可靠性") {
+            SettingsSection("提醒可靠性", cornerDp = settings.cornerLevel.dp()) {
                 Text(
                     "已使用精确闹钟，关掉 app、重启手机后仍会提醒。\n通知里可直接点表情快速记录，不用打开 app。",
                     style = MaterialTheme.typography.bodySmall,
@@ -248,7 +307,7 @@ fun SettingsPage(
         }
 
         // 测试通知：立即弹出一条带表情的通知，方便验证设置是否生效
-        SettingsSection("测试") {
+        SettingsSection("测试", cornerDp = settings.cornerLevel.dp()) {
             Text(
                 "立即弹出一条测试通知，上面有 5 个表情可以直接点。\n点完会自动记录当前小时的心情，通知随即消失。",
                 style = MaterialTheme.typography.bodySmall,
@@ -267,7 +326,7 @@ fun SettingsPage(
         }
 
         // 记录
-        SettingsSection("记录") {
+        SettingsSection("记录", cornerDp = settings.cornerLevel.dp()) {
             SettingLabel("默认心情")
             Text(
                 "打开记录弹窗时预先选中的心情",
@@ -297,7 +356,14 @@ fun SettingsPage(
         }
 
         // 日历
-        SettingsSection("日历") {
+        SettingsSection("日历", cornerDp = settings.cornerLevel.dp()) {
+            SwitchRow(
+                title = "格子里显示心情表情",
+                subtitle = "关闭后日历只显示日期，界面更清爽",
+                checked = settings.calendarShowEmoji,
+                onCheckedChange = { store.setCalendarShowEmoji(it) }
+            )
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
             SwitchRow(
                 title = "格子里显示备注",
                 subtitle = "有备注时在日历格子里显示一行摘要",
@@ -326,7 +392,7 @@ fun SettingsPage(
         }
 
         // 数据
-        SettingsSection("数据") {
+        SettingsSection("数据", cornerDp = settings.cornerLevel.dp()) {
             Text("共 $recordCount 条心情记录")
             Text(
                 "数据只保存在本机，未开启云备份",
@@ -348,7 +414,7 @@ fun SettingsPage(
         }
 
         // 关于
-        SettingsSection("关于") {
+        SettingsSection("关于", cornerDp = settings.cornerLevel.dp()) {
             Text("心情日记", fontWeight = FontWeight.Bold)
             Text(
                 "版本 ${BuildConfig.VERSION_NAME}（versionCode ${BuildConfig.VERSION_CODE}）",
@@ -407,8 +473,11 @@ private fun hourText(hour: Int) = String.format(Locale.CHINA, "%02d:00", hour)
 @Composable
 fun GlassPanel(
     modifier: Modifier = Modifier,
+    /** 圆角大小（dp）。由设置决定，默认 22dp */
+    cornerDp: Int = 22,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val shape = RoundedCornerShape(cornerDp.dp)
     val scheme = MaterialTheme.colorScheme
     val dark = scheme.surface.luminance() < 0.5f
     val accent = scheme.primary
@@ -428,12 +497,12 @@ fun GlassPanel(
     Box(
         modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(22.dp))
+            .clip(shape)
             .background(
                 androidx.compose.ui.graphics.Brush.verticalGradient(
                     listOf(glassTop, glassBottom)
                 ),
-                RoundedCornerShape(22.dp)
+                shape
             )
             // 顶部反光：一条极窄的亮带，模拟玻璃上缘受光
             .background(
@@ -441,7 +510,7 @@ fun GlassPanel(
                     0.0f to Color.White.copy(alpha = if (dark) 0.10f else 0.55f),
                     0.06f to Color.Transparent
                 ),
-                RoundedCornerShape(22.dp)
+                shape
             )
             .border(
                 1.dp,
@@ -452,7 +521,7 @@ fun GlassPanel(
                         Color.White.copy(alpha = if (dark) 0.10f else 0.45f)
                     )
                 ),
-                RoundedCornerShape(22.dp)
+                shape
             )
     ) {
         Column(Modifier.padding(16.dp), content = content)
@@ -460,8 +529,15 @@ fun GlassPanel(
 }
 
 @Composable
-private fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
-    GlassPanel(Modifier.padding(bottom = 16.dp)) {
+private fun SettingsSection(
+    title: String,
+    cornerDp: Int = 22,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    GlassPanel(
+        modifier = Modifier.padding(bottom = 16.dp),
+        cornerDp = cornerDp
+    ) {
             Text(
                 title,
                 style = MaterialTheme.typography.titleMedium,
