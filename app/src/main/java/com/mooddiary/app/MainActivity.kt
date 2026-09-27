@@ -1550,7 +1550,7 @@ data class MonthStats(
  * 合并了原先分散的多趟 filter/groupBy/count/map，
  * 数据量增大时不会反复分配中间集合。
  */
-private fun computeMonthStats(entries: List<MoodEntry>, month: YearMonth): MonthStats {
+internal fun computeMonthStats(entries: List<MoodEntry>, month: YearMonth): MonthStats {
     val inMonth = ArrayList<MoodEntry>()
     val latestByDay = HashMap<String, MoodEntry>()
     val scoreSumByDay = HashMap<String, Float>()
