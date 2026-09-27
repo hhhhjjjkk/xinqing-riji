@@ -51,12 +51,12 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Settings
@@ -492,7 +492,7 @@ fun MoodDiaryApp(
 
     val navItems = listOf(
         "日历" to Icons.Default.CalendarMonth,
-        "记录" to Icons.Default.List,
+        "记录" to Icons.AutoMirrored.Filled.List,
         "统计" to Icons.Default.BarChart,
         "设置" to Icons.Default.Settings
     )
@@ -1443,7 +1443,6 @@ fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) 
         val avg = days.map { moodOf(it.moodId).score }.average()
         // 占比最高的心情
         val topMood = moods.maxByOrNull { m -> days.count { it.moodId == m.id } }
-        val topCount = days.count { it.moodId == topMood!!.id }
 
         // 主色横幅：一眼看到这个月的概况
         Box(
