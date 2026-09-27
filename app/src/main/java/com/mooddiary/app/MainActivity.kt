@@ -691,7 +691,18 @@ fun FloatingNavBar(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(percent = 50))
-                .background(scheme.surface, RoundedCornerShape(percent = 50))
+                // 长按（点亮）时导航栏变白，让被照到的元素真正显出光的颜色；
+                // 其余时间保持与主题一致的表面色
+                .background(
+                    if (glowStrength > 0.01f) {
+                        androidx.compose.ui.graphics.lerp(
+                            scheme.surface, Color.White, glowStrength
+                        )
+                    } else {
+                        scheme.surface
+                    },
+                    RoundedCornerShape(percent = 50)
+                )
                 .border(
                     1.dp,
                     androidx.compose.ui.graphics.Brush.linearGradient(
@@ -827,8 +838,8 @@ fun FloatingNavBar(
                     if (g <= 0.01f) return@drawBehind
                     val cx = size.width / 2f
                     val cy = size.height / 2f
-                    val rw = size.width * 1.9f
-                    val rh = size.height * 2.4f
+                    val rw = size.width * 1.45f
+                    val rh = size.height * 1.8f
                     drawRoundRect(
                         brush = androidx.compose.ui.graphics.Brush.radialGradient(
                             // 颜色更深：以强调色为基础加深饱和度再提亮，
@@ -911,12 +922,12 @@ private fun NavItem(
     )
 
     val base = if (active) accent else MaterialTheme.colorScheme.onSurfaceVariant
-    // 先向强调色深度染色，再明显提亮 → 颜色更深、亮度更高
-    val deepAccent = androidx.compose.ui.graphics.lerp(accent, Color.Black, 0.18f)
+    // 被光照到时：变为该光的颜色，并随光量略微提亮。
+    // 提亮是必要的——选中项本身就是强调色，若只做同色替换则看不出被照亮。
     val litColor = androidx.compose.ui.graphics.lerp(
-        androidx.compose.ui.graphics.lerp(base, deepAccent, (light * 0.85f).coerceIn(0f, 1f)),
+        androidx.compose.ui.graphics.lerp(base, accent, light.coerceIn(0f, 1f)),
         Color.White,
-        (light * 0.30f).coerceIn(0f, 1f)
+        (light * 0.22f).coerceIn(0f, 1f)
     )
 
     Box(modifier, contentAlignment = Alignment.Center) {
