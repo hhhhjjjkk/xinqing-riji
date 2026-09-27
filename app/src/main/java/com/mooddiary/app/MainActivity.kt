@@ -94,7 +94,6 @@ import java.time.LocalTime
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Locale
-import kotlin.math.pow
 import kotlin.math.roundToInt
 
 /** 备注长度上限，防止超长文本整段进内存与数据库 */
@@ -935,8 +934,10 @@ private fun NavItem(
     val ambientColor = androidx.compose.ui.graphics.lerp(
         normal, Color.White, amb
     )
-    // 光色过渡曲线：指数 <1 使染色更早、更深地显现
-    val tint = kotlin.math.pow(light.coerceIn(0f, 1f).toDouble(), 0.55).toFloat()
+    // 染色过渡曲线：tint = 1-(1-l)²，与 pow(l, 0.55) 效果接近，
+    // 让光色更早、更深地显现（纯算术实现，不依赖 math.pow）
+    val l = light.coerceIn(0f, 1f)
+    val tint = 1f - (1f - l) * (1f - l)
     val litColor = androidx.compose.ui.graphics.lerp(
         ambientColor,
         accent,
