@@ -485,9 +485,7 @@ fun MoodDiaryApp(
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.primary,
                 shadowElevation = 0.dp,
-                modifier = Modifier
-                    .size(56.dp)
-                    .pressGlow(color = MaterialTheme.colorScheme.primary)
+                modifier = Modifier.size(56.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
@@ -577,6 +575,21 @@ fun MoodDiaryApp(
             }
         )
     }
+}
+
+/**
+ * 橡皮筋阻尼（用于拖到两端后继续拖动的手感）：
+ * 返回被压缩后的越界位移——越往外拉，实际位移增长越慢，
+ * 视觉上像被橡皮筋拉住，松手后弹回。
+ *
+ * @param over      超出边界的原始位移（正值）
+ * @param dimension 参考行程，越大越"软"
+ */
+private fun rubberBand(over: Float, dimension: Float, constant: Float = 0.55f): Float {
+    val d = dimension.coerceAtLeast(1f)
+    val abs = kotlin.math.abs(over)
+    if (abs <= 0f) return 0f
+    return (1f - 1f / (abs * constant / d + 1f)) * d
 }
 
 /**
@@ -708,8 +721,9 @@ fun FloatingNavBar(
                     initialValue = pillX,
                     targetValue = target,
                     animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMediumLow
+                        // 带回弹的阻尼：松手落地时有一点 Q 弹
+                        dampingRatio = Spring.DampingRatioLowBouncy,
+                        stiffness = Spring.StiffnessMedium
                     )
                 ) { v, _ -> pillX = v }
             }
@@ -823,11 +837,20 @@ fun FloatingNavBar(
                                 val startX = lp.position.x
                                 val minX = pillTargetPx(0)
                                 val maxX = pillTargetPx(items.size - 1)
+                                // 橡皮筋的参考行程：越大越"软"，这里用一格宽度
+                                val dragRange = slotPx
 
                                 drag(down.id) { ch ->
                                     ch.consume()
-                                    val nx = (startPill + (ch.position.x - startX))
-                                        .coerceIn(minX, maxX)
+                                    val raw = startPill + (ch.position.x - startX)
+                                    // Q弹：到达两端后继续拖动时，用橡皮筋阻尼越界——
+                                    // 越往外拉越"费劲"（位移被压缩），松手后弹回。
+                                    // 之前是直接 coerceIn 硬停，所以到边上就断掉没有手感。
+                                    val nx = when {
+                                        raw < minX -> minX - rubberBand(minX - raw, dragRange)
+                                        raw > maxX -> maxX + rubberBand(raw - maxX, dragRange)
+                                        else -> raw
+                                    }
                                     pillX = nx
 
                                     // 连续页位置 → 拆成整页 + 小数偏移，
@@ -1540,64 +1563,6 @@ fun ReminderToggle(store: SettingsStore) {
     }
 }
 
-/**
- * 按压发光（可复用于任意按钮）：被按住时向外发出一圈光，松手渐隐。
- *
- * 这里用 pointerInput 自行追踪按压，而不是依赖组件是否支持传入
- * interactionSource——这样同一个实现可以复用到添加按钮、
- * 设置页的开关行、芯片、按钮等各种组件上。
- *
- * 光源即该按钮本身，光晕在其自身坐标系内绘制，不会错位。
- */
-@Composable
-fun Modifier.pressGlow(
-    color: Color,
-    enabled: Boolean = true,
-    radius: Float = 2.0f
-): Modifier {
-    var pressed by remember { mutableStateOf(false) }
-    val g by animateFloatAsState(
-        targetValue = if (pressed && enabled) 1f else 0f,
-        animationSpec = tween(durationMillis = 180),
-        label = "pressGlow"
-    )
-    return this
-        .pointerInput(enabled) {
-            if (!enabled) return@pointerInput
-            awaitEachGesture {
-                awaitFirstDown(requireUnconsumed = false)
-                pressed = true
-                while (true) {
-                    val ev = awaitPointerEvent()
-                    val ch = ev.changes.firstOrNull() ?: break
-                    if (!ch.pressed) break
-                }
-                pressed = false
-            }
-        }
-        .drawBehind {
-            if (g <= 0.01f) return@drawBehind
-            val cx = size.width / 2f
-            val cy = size.height / 2f
-            // 横向铺开更宽、纵向更收敛，像光落在面上向两侧扩散
-            val rw = size.width * (1f + radius * 0.75f)
-            val rh = size.height * (1f + radius * 0.45f)
-            drawRoundRect(
-                brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                    colorStops = arrayOf(
-                        0.00f to color.copy(alpha = 0.34f * g),
-                        0.40f to color.copy(alpha = 0.16f * g),
-                        1.00f to Color.Transparent
-                    ),
-                    center = Offset(cx, cy),
-                    radius = rw / 2f
-                ),
-                topLeft = Offset(cx - rw / 2f, cy - rh / 2f),
-                size = Size(rw, rh),
-                cornerRadius = CornerRadius(rh / 2f)
-            )
-        }
-}
 
 private fun toast(context: android.content.Context, msg: String) =
     android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
