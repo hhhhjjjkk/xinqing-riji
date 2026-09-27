@@ -868,6 +868,8 @@ fun FloatingNavBar(
                                 val startY = lp.position.y
                                 // 垂直方向的橡皮筋行程（约半个按钮高度），限制上下位移幅度
                                 val vertRange = with(density) { HIGHLIGHT_H.toPx() } * 0.35f
+                                // 向上比向下更收敛（约一半）
+                                val upRange = vertRange * 0.45f
                                 val minX = pillTargetPx(0)
                                 val maxX = pillTargetPx(items.size - 1)
                                 // 橡皮筋的参考行程：越大越"软"。
@@ -889,8 +891,9 @@ fun FloatingNavBar(
                                     // 幅度明显小于椭圆，形成层次感
                                     // 上下滑动同样带 Q 弹：作用在**椭圆自身**，
                                     // 越拉越费劲，松手弹回，导航栏保持不动
+                                    val dy = ch.position.y - startY
                                     pillY = rubberBandSigned(
-                                        ch.position.y - startY, vertRange
+                                        dy, if (dy < 0f) upRange else vertRange
                                     )
                                     pillX = nx
 
@@ -1180,6 +1183,7 @@ fun CalendarCell(
                 if (today) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(10.dp))
                 else Modifier
             )
+            .pressBounce(pressedScale = 0.90f)
             .clickable(onClick = click),
         contentAlignment = Alignment.Center
     ) {
@@ -1244,6 +1248,7 @@ fun HourMoodSheet(
                         modifier = Modifier
                             .clip(RoundedCornerShape(10.dp))
                             .background(m?.color ?: MaterialTheme.colorScheme.surfaceVariant)
+                            .pressBounce(pressedScale = 0.90f)
                             .clickable { onPick(h, e) }
                             .padding(vertical = 10.dp)
                             .fillMaxWidth()
@@ -1275,7 +1280,12 @@ fun RecordsPage(entries: List<MoodEntry>, open: (MoodEntry) -> Unit) {
     ) {
         items(entries, key = { it.id }) { e ->
             val m = moodOf(e.moodId)
-            Card(Modifier.fillMaxWidth().clickable { open(e) }) {
+            Card(
+                Modifier
+                    .fillMaxWidth()
+                    .pressBounce(pressedScale = 0.97f)
+                    .clickable { open(e) }
+            ) {
                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(m.emoji, fontSize = 30.sp)
                     Spacer(Modifier.width(12.dp))
@@ -1536,6 +1546,7 @@ fun MoodDialog(
                                     if (selected == m.id) Modifier.background(m.color.copy(alpha = .25f))
                                     else Modifier
                                 )
+                                .pressBounce(pressedScale = 0.88f)
                                 .clickable { selected = m.id }
                                 .padding(5.dp)
                         ) {
