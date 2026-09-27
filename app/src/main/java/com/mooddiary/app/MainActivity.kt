@@ -717,7 +717,8 @@ fun FloatingNavBar(
                 items.forEachIndexed { idx, item ->
                     // 受光量：距离 0 → 1.0，距离 1 → 0.5，距离 2 → 0，再远不受影响
                     val dist = kotlin.math.abs(idx - lightCenter)
-                    val light = ((2f - dist) / 2f).coerceIn(0f, 1f) * glowStrength
+                    // 衰减更慢：距离 0 → 1.0，1 → 0.63，2 → 0.25
+                    val light = ((2.5f - dist) / 2.5f).coerceIn(0f, 1f) * glowStrength
                     NavItem(
                         label = item.first,
                         icon = item.second,
@@ -933,10 +934,12 @@ private fun NavItem(
     val ambientColor = androidx.compose.ui.graphics.lerp(
         normal, Color.White, amb
     )
+    // 光色过渡曲线：指数 <1 使染色更早、更深地显现
+    val tint = kotlin.math.pow(light.coerceIn(0f, 1f).toDouble(), 0.55).toFloat()
     val litColor = androidx.compose.ui.graphics.lerp(
         ambientColor,
         accent,
-        light.coerceIn(0f, 1f)
+        tint
     )
 
     Box(modifier, contentAlignment = Alignment.Center) {
