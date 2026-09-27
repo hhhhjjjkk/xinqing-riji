@@ -176,7 +176,8 @@ class SettingsStore(context: Context) {
     companion object {
         const val PREFS = "app_settings"
         private const val KEY_THEME = "theme_mode"
-        private const val KEY_REMINDER = "reminder_enabled"
+        /** 提醒开关的存储键；Reminder 需读取同一真值，故公开 */
+        const val KEY_REMINDER = "reminder_enabled"
         private const val KEY_QUIET_ENABLED = "quiet_enabled"
         private const val KEY_QUIET_START = "quiet_start"
         private const val KEY_QUIET_END = "quiet_end"
