@@ -711,6 +711,9 @@ fun FloatingNavBar(
 
         val scope = rememberCoroutineScope()
         var pillX by remember { mutableFloatStateOf(0f) }
+        // 导航栏跟随位移：椭圆越界时整条导航栏小幅跟动，形成"整体被拉动"的层次
+        var navShift by remember { mutableFloatStateOf(0f) }
+        var navShiftJob by remember { mutableStateOf<Job?>(null) }
         var settleJob by remember { mutableStateOf<Job?>(null) }
         var firstLayout by remember { mutableStateOf(true) }
 
@@ -726,6 +729,20 @@ fun FloatingNavBar(
                         stiffness = Spring.StiffnessMedium
                     )
                 ) { v, _ -> pillX = v }
+            }
+        }
+
+        fun animateNavTo(target: Float) {
+            navShiftJob?.cancel()
+            navShiftJob = scope.launch {
+                animate(
+                    initialValue = navShift,
+                    targetValue = target,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioLowBouncy,
+                        stiffness = Spring.StiffnessMedium
+                    )
+                ) { v, _ -> navShift = v }
             }
         }
 
@@ -746,6 +763,8 @@ fun FloatingNavBar(
         Box(
             Modifier
                 .fillMaxWidth()
+                // 椭圆越界时，整条导航栏小幅跟动
+                .offset(x = with(density) { navShift.toDp() })
                 .clip(RoundedCornerShape(percent = 50))
                 // 把导航栏当作一面真实的墙：光源处最亮，
                 // 亮度沿水平方向向左右两侧扩散衰减（而非均匀发光）
@@ -753,7 +772,7 @@ fun FloatingNavBar(
                     wallLightBrush(
                         surface = scheme.surface,
                         light = androidx.compose.ui.graphics.lerp(accent, Color.White, 0.30f),
-                        centerFrac = (pillX + pillWPx / 2f) /
+                        centerFrac = (pillX + pillWPx / 2f - navShift) /
                             with(density) { maxWidth.toPx() }.coerceAtLeast(1f),
                         strength = glowStrength * 0.30f
                     ),
@@ -837,8 +856,9 @@ fun FloatingNavBar(
                                 val startX = lp.position.x
                                 val minX = pillTargetPx(0)
                                 val maxX = pillTargetPx(items.size - 1)
-                                // 橡皮筋的参考行程：越大越"软"，这里用一格宽度
-                                val dragRange = slotPx
+                                // 橡皮筋的参考行程：越大越"软"。
+                                // 用 0.4 格，限制椭圆移出导航栏的幅度。
+                                val dragRange = slotPx * 0.4f
 
                                 drag(down.id) { ch ->
                                     ch.consume()
@@ -850,6 +870,13 @@ fun FloatingNavBar(
                                         raw < minX -> minX - rubberBand(minX - raw, dragRange)
                                         raw > maxX -> maxX + rubberBand(raw - maxX, dragRange)
                                         else -> raw
+                                    }
+                                    // 导航栏跟随：只取椭圆实际越界量的一小部分，
+                                    // 幅度明显小于椭圆，形成层次感
+                                    navShift = when {
+                                        nx < minX -> (nx - minX) * 0.18f
+                                        nx > maxX -> (nx - maxX) * 0.18f
+                                        else -> 0f
                                     }
                                     pillX = nx
 
@@ -872,7 +899,8 @@ fun FloatingNavBar(
 
                                 scrubbing = false
                                 glowIndex = null
-                                // 松手：椭圆与页面各自平滑落到目标页
+                                // 松手：椭圆、导航栏与页面各自平滑落到目标位置
+                                animateNavTo(0f)
                                 currentOnScrubEnd(scrubIndex)
                                 animatePillTo(pillTargetPx(scrubIndex))
                             } else {
