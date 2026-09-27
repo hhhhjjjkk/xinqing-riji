@@ -653,6 +653,10 @@ private fun wallLightBrush(
  *   受光量按与光源的距离衰减，只作用于相邻项
  * - 光照由墙面与被照亮元素本身呈现，而非叠一圈光环
  *
+ * Q 弹（作用在椭圆自身，导航栏保持不动）：
+ * 拖到两端后继续拖动，或上下拖动时，椭圆位移经橡皮筋压缩——
+ * 越拉越费劲，松手后弹回原位。
+ *
  * 拖动时的页面跟随：
  * 通过 scrollToPage(page, fraction) 传入**小数偏移**，
  * 让内容页随椭圆连续移动，而不是按整页瞬间跳转。
@@ -719,11 +723,10 @@ fun FloatingNavBar(
         val scope = rememberCoroutineScope()
         var pillX by remember { mutableFloatStateOf(0f) }
         // 导航栏跟随位移：椭圆越界时整条导航栏小幅跟动，形成"整体被拉动"的层次
-        var navShift by remember { mutableFloatStateOf(0f) }
-        // 垂直方向的跟随位移（上下滑动时的 Q 弹）
-        var navShiftY by remember { mutableFloatStateOf(0f) }
-        var navShiftYJob by remember { mutableStateOf<Job?>(null) }
-        var navShiftJob by remember { mutableStateOf<Job?>(null) }
+        // 椭圆的垂直弹性位移（上下拖动时的 Q 弹，松手弹回）。
+        // 注意：Q 弹作用在椭圆自身，导航栏保持不动。
+        var pillY by remember { mutableFloatStateOf(0f) }
+        var pillYJob by remember { mutableStateOf<Job?>(null) }
         var settleJob by remember { mutableStateOf<Job?>(null) }
         var firstLayout by remember { mutableStateOf(true) }
 
@@ -742,31 +745,17 @@ fun FloatingNavBar(
             }
         }
 
-        fun animateNavTo(target: Float) {
-            navShiftJob?.cancel()
-            navShiftJob = scope.launch {
+        fun animatePillYTo(target: Float) {
+            pillYJob?.cancel()
+            pillYJob = scope.launch {
                 animate(
-                    initialValue = navShift,
+                    initialValue = pillY,
                     targetValue = target,
                     animationSpec = spring(
                         dampingRatio = Spring.DampingRatioLowBouncy,
                         stiffness = Spring.StiffnessMedium
                     )
-                ) { v, _ -> navShift = v }
-            }
-        }
-
-        fun animateNavYTo(target: Float) {
-            navShiftYJob?.cancel()
-            navShiftYJob = scope.launch {
-                animate(
-                    initialValue = navShiftY,
-                    targetValue = target,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioLowBouncy,
-                        stiffness = Spring.StiffnessMedium
-                    )
-                ) { v, _ -> navShiftY = v }
+                ) { v, _ -> pillY = v }
             }
         }
 
@@ -787,11 +776,6 @@ fun FloatingNavBar(
         Box(
             Modifier
                 .fillMaxWidth()
-                // 椭圆越界 / 上下滑动时，整条导航栏小幅跟动
-                .offset(
-                    x = with(density) { navShift.toDp() },
-                    y = with(density) { navShiftY.toDp() }
-                )
                 .clip(RoundedCornerShape(percent = 50))
                 // 把导航栏当作一面真实的墙：光源处最亮，
                 // 亮度沿水平方向向左右两侧扩散衰减（而非均匀发光）
@@ -799,7 +783,7 @@ fun FloatingNavBar(
                     wallLightBrush(
                         surface = scheme.surface,
                         light = androidx.compose.ui.graphics.lerp(accent, Color.White, 0.30f),
-                        centerFrac = (pillX + pillWPx / 2f - navShift) /
+                        centerFrac = (pillX + pillWPx / 2f) /
                             with(density) { maxWidth.toPx() }.coerceAtLeast(1f),
                         strength = glowStrength * 0.30f
                     ),
@@ -903,14 +887,9 @@ fun FloatingNavBar(
                                     }
                                     // 导航栏跟随：只取椭圆实际越界量的一小部分，
                                     // 幅度明显小于椭圆，形成层次感
-                                    navShift = when {
-                                        nx < minX -> (nx - minX) * 0.18f
-                                        nx > maxX -> (nx - maxX) * 0.18f
-                                        else -> 0f
-                                    }
-                                    // 上下滑动同样带 Q 弹：导航栏整体上下小幅位移，
-                                    // 越拉越费劲，松手弹回
-                                    navShiftY = rubberBandSigned(
+                                    // 上下滑动同样带 Q 弹：作用在**椭圆自身**，
+                                    // 越拉越费劲，松手弹回，导航栏保持不动
+                                    pillY = rubberBandSigned(
                                         ch.position.y - startY, vertRange
                                     )
                                     pillX = nx
@@ -935,8 +914,7 @@ fun FloatingNavBar(
                                 scrubbing = false
                                 glowIndex = null
                                 // 松手：椭圆、导航栏与页面各自平滑落到目标位置
-                                animateNavTo(0f)
-                                animateNavYTo(0f)
+                                animatePillYTo(0f)
                                 currentOnScrubEnd(scrubIndex)
                                 animatePillTo(pillTargetPx(scrubIndex))
                             } else {
@@ -966,7 +944,10 @@ fun FloatingNavBar(
         Box(
             Modifier
                 .align(Alignment.CenterStart)
-                .offset(x = with(density) { pillX.toDp() }, y = 0.dp)
+                .offset(
+                    x = with(density) { pillX.toDp() },
+                    y = with(density) { pillY.toDp() }
+                )
                 .size(HIGHLIGHT_W, HIGHLIGHT_H)
                 .graphicsLayer {
                     scaleX = highlightScale
