@@ -255,7 +255,8 @@ class MoodViewModel(application: Application) : AndroidViewModel(application) {
 
 data class Mood(val id: Int, val label: String, val emoji: String, val color: Color, val score: Int)
 
-val moods = listOf(
+/** 内置默认心情（用户未自定义时使用） */
+val defaultMoods = listOf(
     Mood(5, "开心", "😄", Color(0xFFFFB300), 5),
     Mood(4, "平静", "😌", Color(0xFF43A047), 4),
     Mood(3, "一般", "😐", Color(0xFF78909C), 3),
@@ -263,7 +264,32 @@ val moods = listOf(
     Mood(1, "生气", "😡", Color(0xFFEF5350), 1)
 )
 
-fun moodOf(id: Int) = moods.firstOrNull { it.id == id } ?: moods[2]
+/**
+ * 心情目录：可由用户在设置中自定义。
+ *
+ * 用 Compose 的全局可观察状态承载，这样原有的 moods / moodOf 调用点
+ * 无需改动即可自动跟随自定义结果刷新。
+ * 持久化由 MoodCatalog 负责（见 Settings.kt）。
+ */
+var moods by mutableStateOf(defaultMoods)
+    private set
+
+/** 历史记录里可能引用了已被删除的心情，此时回退到最接近的一个 */
+fun moodOf(id: Int): Mood =
+    moods.firstOrNull { it.id == id }
+        ?: moods.firstOrNull { it.score == 3 }
+        ?: moods[moods.size / 2]
+
+/**
+ * 应用一份新的心情目录。
+ * @param next 新列表（已按分数或用户期望排序）
+ */
+fun applyMoods(next: List<Mood>) {
+    if (next.isNotEmpty()) moods = next
+}
+
+/** 生成一个未被占用的心情 id */
+fun nextMoodId(): Int = (moods.maxOfOrNull { it.id } ?: 0) + 1
 
 class MainActivity : ComponentActivity() {
     private val openHour = mutableStateOf<Int?>(null)
@@ -274,6 +300,8 @@ class MainActivity : ComponentActivity() {
         openHour.value = intent.getIntExtra(EXTRA_HOUR, -1).takeIf { it >= 0 }
         val store = SettingsStore(this)
         store.syncReminder()
+        // 启动时载入用户自定义的心情目录（未自定义则沿用内置默认）
+        MoodCatalog.load(this)?.let { applyMoods(it) }
         setContent {
             val settings by store.settings.collectAsStateWithLifecycle(initialValue = store.current())
             MoodDiaryTheme(
@@ -1409,14 +1437,151 @@ fun RecordsPage(entries: List<MoodEntry>, open: (MoodEntry) -> Unit) {
     }
 }
 
+/**
+ * 情绪趋势图：按日均分绘制折线 + 渐变填充。
+ *
+ * 纯 Canvas 绘制，不引入图表库；横向按日期序号等距排布，
+ * 纵向把 1..5 分映射到高度。
+ */
+@Composable
+private fun MoodTrendChart(
+    points: List<Pair<LocalDate, Float>>,
+    accent: Color,
+    modifier: Modifier = Modifier
+) {
+    androidx.compose.foundation.Canvas(modifier) {
+        if (points.size < 2) return@Canvas
+        val w = size.width
+        val h = size.height
+        val maxScore = 5f
+        val minScore = 1f
+        val stepX = w / (points.size - 1).toFloat()
+
+        fun yOf(score: Float): Float {
+            val t = ((score - minScore) / (maxScore - minScore)).coerceIn(0f, 1f)
+            return h - t * h
+        }
+
+        // 参考线：5 分 / 3 分 / 1 分
+        listOf(5f, 3f, 1f).forEach { lv ->
+            val y = yOf(lv)
+            drawLine(
+                color = accent.copy(alpha = 0.10f),
+                start = Offset(0f, y),
+                end = Offset(w, y),
+                strokeWidth = 1f
+            )
+        }
+
+        val pts = points.mapIndexed { i, (_, score) ->
+            Offset(i * stepX, yOf(score))
+        }
+
+        // 渐变填充
+        val fill = androidx.compose.ui.graphics.Path().apply {
+            moveTo(pts.first().x, h)
+            pts.forEach { lineTo(it.x, it.y) }
+            lineTo(pts.last().x, h)
+            close()
+        }
+        drawPath(
+            path = fill,
+            brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                listOf(accent.copy(alpha = 0.28f), Color.Transparent)
+            )
+        )
+
+        // 折线
+        val line = androidx.compose.ui.graphics.Path().apply {
+            moveTo(pts.first().x, pts.first().y)
+            pts.drop(1).forEach { lineTo(it.x, it.y) }
+        }
+        drawPath(
+            path = line,
+            color = accent,
+            style = androidx.compose.ui.graphics.drawscope.Stroke(
+                width = 2.5.dp.toPx(),
+                cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                join = androidx.compose.ui.graphics.StrokeJoin.Round
+            )
+        )
+
+        // 数据点（点多时只画首尾与峰值，避免糊成一团）
+        val dotR = 3.dp.toPx()
+        val showAll = points.size <= 16
+        pts.forEachIndexed { i, p ->
+            val isPeak = points[i].second >= points.maxOf { it.second } - 0.01f
+            if (showAll || i == 0 || i == pts.lastIndex || isPeak) {
+                drawCircle(color = accent, radius = dotR, center = p)
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.9f),
+                    radius = dotR * 0.45f,
+                    center = p
+                )
+            }
+        }
+    }
+}
+
+/** 当月统计结果 */
+data class MonthStats(
+    val inMonth: List<MoodEntry>,
+    val latestPerDay: List<MoodEntry>,
+    /** 每天的均分（按日升序），用于趋势图 */
+    val dailyScores: List<Pair<LocalDate, Float>>,
+    /** 每种心情的占比计数 */
+    val moodCounts: Map<Int, Int>
+)
+
+/**
+ * 单次遍历统计当月数据。
+ *
+ * 合并了原先分散的多趟 filter/groupBy/count/map，
+ * 数据量增大时不会反复分配中间集合。
+ */
+private fun computeMonthStats(entries: List<MoodEntry>, month: YearMonth): MonthStats {
+    val inMonth = ArrayList<MoodEntry>()
+    val latestByDay = HashMap<String, MoodEntry>()
+    val scoreSumByDay = HashMap<String, Float>()
+    val countByDay = HashMap<String, Int>()
+    val counts = HashMap<Int, Int>()
+
+    for (e in entries) {
+        val d = runCatching { LocalDate.parse(e.date) }.getOrNull() ?: continue
+        if (YearMonth.from(d) != month) continue
+        inMonth += e
+        counts[e.moodId] = (counts[e.moodId] ?: 0) + 1
+
+        val prev = latestByDay[e.date]
+        if (prev == null || e.hour > prev.hour) latestByDay[e.date] = e
+
+        // 均分按全部记录计算（含同一天的多条），更能反映真实情绪
+        scoreSumByDay[e.date] = (scoreSumByDay[e.date] ?: 0f) + moodOf(e.moodId).score
+        countByDay[e.date] = (countByDay[e.date] ?: 0) + 1
+    }
+
+    val daily = scoreSumByDay.keys
+        .mapNotNull { k -> runCatching { LocalDate.parse(k) }.getOrNull() }
+        .sorted()
+        .map { d -> d to (scoreSumByDay[d.toString()]!! / countByDay[d.toString()]!!) }
+
+    return MonthStats(
+        inMonth = inMonth,
+        latestPerDay = latestByDay.values.sortedBy { it.date },
+        dailyScores = daily,
+        moodCounts = counts
+    )
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) -> Unit) {
-    val inMonth = entries.filter {
-        runCatching { YearMonth.from(LocalDate.parse(it.date)) }.getOrNull() == month
-    }
-    val latestByDay = inMonth.groupBy { it.date }.mapValues { (_, list) -> list.maxByOrNull { it.hour }!! }
-    val days = latestByDay.values
+    // 一次遍历完成：筛出当月、并按天保留最晚一条记录。
+    // 此前是 filter + groupBy + mapValues 三次遍历并产生中间集合，
+    // 现在只扫一遍 entries，只保留每天的最后一条。
+    val stats = remember(entries, month) { computeMonthStats(entries, month) }
+    val inMonth = stats.inMonth
+    val days = stats.latestPerDay
     val accent = MaterialTheme.colorScheme.primary
     val onAccent = MaterialTheme.colorScheme.onPrimary
 
@@ -1476,6 +1641,36 @@ fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) 
 
         Spacer(Modifier.height(20.dp))
 
+        // —— 情绪趋势（按日均分的时间曲线） ——
+        if (stats.dailyScores.size >= 2) {
+            Text(
+                "情绪趋势",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "按日平均分，越高代表状态越好",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+            Spacer(Modifier.height(12.dp))
+            MoodTrendChart(
+                points = stats.dailyScores,
+                accent = accent,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .height(150.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                    .padding(12.dp)
+            )
+            Spacer(Modifier.height(20.dp))
+        }
+
         // —— 情绪分布（用主色调进度条，且右侧显示百分比） ——
         Text(
             "情绪分布",
@@ -1491,7 +1686,8 @@ fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) 
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             moods.forEach { m ->
-                val count = days.count { it.moodId == m.id }
+                // 直接用单次遍历时统计好的计数，不再重复遍历
+                val count = stats.moodCounts[m.id] ?: 0
                 val pct = if (days.isEmpty()) 0f else count.toFloat() / days.size
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(m.emoji, fontSize = 22.sp, modifier = Modifier.width(34.dp))

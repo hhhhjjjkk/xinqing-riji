@@ -1,6 +1,15 @@
 package com.mooddiary.app
 
 import androidx.compose.foundation.background
+import kotlin.math.roundToInt
+import androidx.compose.material3.Slider
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.border
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.Color
@@ -59,6 +68,7 @@ fun SettingsPage(
     }
 
     var clearConfirm by remember { mutableStateOf(false) }
+    var moodEditorOpen by remember { mutableStateOf(false) }
     var hourPicker by remember { mutableStateOf<Pair<String, Int>?>(null) }
 
     Column(
@@ -327,6 +337,23 @@ fun SettingsPage(
 
         // 记录
         SettingsSection("记录", cornerDp = settings.cornerLevel.dp()) {
+            SettingLabel("心情标签")
+            Text(
+                "可增删改：名称、表情、颜色与分值",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { moodEditorOpen = true },
+                modifier = Modifier.pressBounce(pressedScale = 0.94f)
+            ) {
+                Icon(Icons.Default.Edit, null)
+                Spacer(Modifier.width(6.dp))
+                Text("管理心情标签（${moods.size} 个）")
+            }
+
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
             SettingLabel("默认心情")
             Text(
                 "打开记录弹窗时预先选中的心情",
@@ -440,6 +467,10 @@ fun SettingsPage(
                 else store.setQuietRange(settings.quietStart, h)
             }
         )
+    }
+
+    if (moodEditorOpen) {
+        MoodEditorDialog(onClose = { moodEditorOpen = false })
     }
 
     if (clearConfirm) {
@@ -631,4 +662,199 @@ private fun HourPickerDialog(
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )
+}
+
+
+/**
+ * 心情标签管理：增删改。
+ *
+ * 编辑的是一份本地副本，点「保存」才写回并持久化，
+ * 避免边改边写导致历史记录引用的 id 中途失效。
+ */
+@Composable
+fun MoodEditorDialog(
+    onClose: () -> Unit
+) {
+    val context = LocalContext.current
+    var draft by remember { mutableStateOf(moods.toList()) }
+    var editing by remember { mutableStateOf<Mood?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("心情标签") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                draft.forEach { m ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { editing = m }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            Modifier
+                                .size(30.dp)
+                                .clip(CircleShape)
+                                .background(m.color),
+                            contentAlignment = Alignment.Center
+                        ) { Text(m.emoji, fontSize = 16.sp) }
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(m.label, fontWeight = FontWeight.Medium)
+                            Text(
+                                "分值 ${m.score}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        IconButton(onClick = {
+                            if (draft.size <= 2) {
+                                android.widget.Toast.makeText(
+                                    context, "至少保留 2 个心情",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
+                            } else {
+                                draft = draft.filter { it.id != m.id }
+                            }
+                        }) {
+                            Icon(Icons.Default.Delete, "删除", tint = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                    HorizontalDivider()
+                }
+
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = {
+                        editing = Mood(
+                            id = nextMoodId(),
+                            label = "新心情",
+                            emoji = "🙂",
+                            color = MaterialTheme.colorScheme.primary,
+                            score = 3
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth().pressBounce(pressedScale = 0.96f)
+                ) {
+                    Icon(Icons.Default.Add, null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("添加心情")
+                }
+
+                if (editing != null) {
+                    Spacer(Modifier.height(12.dp))
+                    HorizontalDivider()
+                    Spacer(Modifier.height(12.dp))
+                    MoodEditForm(
+                        mood = editing!!,
+                        onChange = { editing = it }
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val merged = draft.map { d ->
+                    editing?.takeIf { it.id == d.id } ?: d
+                }.let { list ->
+                    // 新添加的（id 不在 draft 中）需要并入
+                    val e = editing
+                    if (e != null && list.none { it.id == e.id }) list + e else list
+                }
+                applyMoods(merged)
+                MoodCatalog.save(context, merged)
+                android.widget.Toast.makeText(
+                    context, "已保存", android.widget.Toast.LENGTH_SHORT
+                ).show()
+                onClose()
+            }) { Text("保存") }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = {
+                    MoodCatalog.reset(context)
+                    applyMoods(defaultMoods)
+                    android.widget.Toast.makeText(
+                        context, "已恢复默认", android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                    onClose()
+                }) { Text("恢复默认") }
+                TextButton(onClick = onClose) { Text("取消") }
+            }
+        }
+    )
+}
+
+/** 单个心情的编辑表单 */
+@Composable
+private fun MoodEditForm(
+    mood: Mood,
+    onChange: (Mood) -> Unit
+) {
+    val presets = listOf(
+        "😄", "😌", "😐", "😔", "😡", "🥰", "😴", "🤔",
+        "😢", "🤩", "😰", "🥳", "😤", "🫠", "😶", "🙃"
+    )
+    val colors = listOf(
+        0xFFFFB300, 0xFF43A047, 0xFF78909C, 0xFF42A5F5, 0xFFEF5350,
+        0xFFAB47BC, 0xFF26A69A, 0xFFEC407A, 0xFF7E57C2, 0xFF8D6E63
+    )
+
+    Column {
+        OutlinedTextField(
+            value = mood.label,
+            onValueChange = { onChange(mood.copy(label = it)) },
+            label = { Text("名称") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(10.dp))
+        Text("表情", style = MaterialTheme.typography.bodySmall)
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            presets.forEach { e ->
+                FilterChip(
+                    selected = mood.emoji == e,
+                    onClick = { onChange(mood.copy(emoji = e)) },
+                    label = { Text(e, fontSize = 16.sp) },
+                    modifier = Modifier.pressBounce(pressedScale = 0.9f)
+                )
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Text("颜色", style = MaterialTheme.typography.bodySmall)
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            colors.forEach { c ->
+                val col = Color(c)
+                Box(
+                    Modifier
+                        .size(30.dp)
+                        .clip(CircleShape)
+                        .background(col)
+                        .pressBounce(pressedScale = 0.85f)
+                        .clickable { onChange(mood.copy(color = col)) }
+                        .then(
+                            if (mood.color.value == col.value)
+                                Modifier.border(2.dp, MaterialTheme.colorScheme.onSurface, CircleShape)
+                            else Modifier
+                        )
+                )
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Text("分值 ${mood.score}（用于趋势统计）", style = MaterialTheme.typography.bodySmall)
+        Slider(
+            value = mood.score.toFloat(),
+            onValueChange = { onChange(mood.copy(score = it.roundToInt().coerceIn(1, 5))) },
+            valueRange = 1f..5f,
+            steps = 3
+        )
+    }
 }

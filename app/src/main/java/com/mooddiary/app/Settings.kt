@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -202,3 +203,59 @@ fun shouldUseDarkTheme(themeMode: ThemeMode): Boolean =
         ThemeMode.LIGHT -> false
         ThemeMode.DARK -> true
     }
+
+
+/**
+ * 心情目录的持久化。
+ *
+ * 用极简的文本格式存储，避免引入 JSON 依赖：
+ *   每条一行，字段用 \u0001 分隔：id,label,emoji,colorArgb,score
+ * 颜色以 ARGB 的 Long 文本保存。
+ */
+object MoodCatalog {
+
+    private const val KEY = "mood_catalog_v1"
+    private const val SEP = "\u0001"
+
+    /** 读取自定义目录；未自定义过则返回 null（由调用方沿用内置默认） */
+    fun load(context: Context): List<Mood>? {
+        val prefs = context.applicationContext
+            .getSharedPreferences(SettingsStore.PREFS, Context.MODE_PRIVATE)
+        val raw = prefs.getString(KEY, null) ?: return null
+        if (raw.isBlank()) return null
+        val list = raw.lines().mapNotNull { line ->
+            val f = line.split(SEP)
+            if (f.size < 5) return@mapNotNull null
+            val id = f[0].toIntOrNull() ?: return@mapNotNull null
+            val score = f[4].toIntOrNull() ?: return@mapNotNull null
+            val argb = f[3].toLongOrNull() ?: return@mapNotNull null
+            Mood(
+                id = id,
+                label = f[1],
+                emoji = f[2],
+                color = Color(argb.toULong().toLong()),
+                score = score
+            )
+        }
+        return list.ifEmpty { null }
+    }
+
+    fun save(context: Context, list: List<Mood>) {
+        val prefs = context.applicationContext
+            .getSharedPreferences(SettingsStore.PREFS, Context.MODE_PRIVATE)
+        val text = list.joinToString("\n") { m ->
+            listOf(
+                m.id.toString(), m.label, m.emoji,
+                m.color.value.toString(), m.score.toString()
+            ).joinToString(SEP)
+        }
+        prefs.edit().putString(KEY, text).commit()
+    }
+
+    /** 恢复为内置默认 */
+    fun reset(context: Context) {
+        val prefs = context.applicationContext
+            .getSharedPreferences(SettingsStore.PREFS, Context.MODE_PRIVATE)
+        prefs.edit().remove(KEY).commit()
+    }
+}
