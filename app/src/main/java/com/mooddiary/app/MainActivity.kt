@@ -691,18 +691,9 @@ fun FloatingNavBar(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(percent = 50))
-                // 长按（点亮）时导航栏变白，让被照到的元素真正显出光的颜色；
-                // 其余时间保持与主题一致的表面色
-                .background(
-                    if (glowStrength > 0.01f) {
-                        androidx.compose.ui.graphics.lerp(
-                            scheme.surface, Color.White, glowStrength
-                        )
-                    } else {
-                        scheme.surface
-                    },
-                    RoundedCornerShape(percent = 50)
-                )
+                // 底色始终与主题一致（不做变化）；
+                // 需要变白的是图标与文字，见 NavItem
+                .background(scheme.surface, RoundedCornerShape(percent = 50))
                 .border(
                     1.dp,
                     androidx.compose.ui.graphics.Brush.linearGradient(
@@ -732,6 +723,9 @@ fun FloatingNavBar(
                         icon = item.second,
                         active = idx == activeIndex,
                         accent = accent,
+                        // 长按期间整体变白（四个一致）
+                        ambient = glowStrength,
+                        // 光照射到的地方呈现光的颜色
                         lightAmount = light,
                         modifier = Modifier.weight(1f)
                     )
@@ -911,6 +905,9 @@ private fun NavItem(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     active: Boolean,
     accent: Color,
+    /** 长按环境强度 0..1：>0 时图标与文字整体转为白色 */
+    ambient: Float = 0f,
+    /** 该位置接收到的光量 0..1：被光照到则呈现光的颜色 */
     lightAmount: Float = 0f,
     modifier: Modifier = Modifier
 ) {
@@ -920,14 +917,26 @@ private fun NavItem(
         animationSpec = tween(durationMillis = 90),
         label = "navLight"
     )
+    val amb by animateFloatAsState(
+        targetValue = ambient.coerceIn(0f, 1f),
+        animationSpec = tween(durationMillis = 160),
+        label = "navAmbient"
+    )
 
-    val base = if (active) accent else MaterialTheme.colorScheme.onSurfaceVariant
-    // 被光照到时：变为该光的颜色，并随光量略微提亮。
-    // 提亮是必要的——选中项本身就是强调色，若只做同色替换则看不出被照亮。
+    // 平常态：跟随主题（选中用强调色，未选中用中性灰）
+    val normal = if (active) accent else MaterialTheme.colorScheme.onSurfaceVariant
+
+    // 两步着色：
+    // ① 长按期间，四个图标与文字整体变为**白色**
+    // ② 被光照射到的位置，再从白色变为**光的颜色**
+    // 白色作为中间态使染色清晰可辨（深灰底上几乎看不出颜色变化）
+    val ambientColor = androidx.compose.ui.graphics.lerp(
+        normal, Color.White, amb
+    )
     val litColor = androidx.compose.ui.graphics.lerp(
-        androidx.compose.ui.graphics.lerp(base, accent, light.coerceIn(0f, 1f)),
-        Color.White,
-        (light * 0.22f).coerceIn(0f, 1f)
+        ambientColor,
+        accent,
+        light.coerceIn(0f, 1f)
     )
 
     Box(modifier, contentAlignment = Alignment.Center) {
