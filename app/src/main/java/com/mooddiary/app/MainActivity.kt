@@ -783,10 +783,18 @@ fun FloatingNavBar(
                 .background(
                     wallLightBrush(
                         surface = scheme.surface,
-                        light = androidx.compose.ui.graphics.lerp(accent, Color.White, 0.30f),
+                        // 深色主题：光偏白提亮（深底上更醒目）
+                        // 浅色主题：直接用强调色（浅底上偏白的光几乎看不出，
+                        //           用强调色才能形成明显的彩色光带）
+                        light = if (glassDark) {
+                            androidx.compose.ui.graphics.lerp(accent, Color.White, 0.30f)
+                        } else {
+                            androidx.compose.ui.graphics.lerp(accent, Color.Black, 0.10f)
+                        },
                         centerFrac = (pillX + pillWPx / 2f) /
                             with(density) { maxWidth.toPx() }.coerceAtLeast(1f),
-                        strength = glowStrength * 0.30f
+                        // 浅色底上同样的强度会更不明显，适当加强
+                        strength = glowStrength * if (glassDark) 0.30f else 0.42f
                     ),
                     RoundedCornerShape(percent = 50)
                 )
@@ -1024,11 +1032,23 @@ private fun NavItem(
     val normal = if (active) accent else MaterialTheme.colorScheme.onSurfaceVariant
 
     // 两步着色：
-    // ① 长按期间，四个图标与文字整体变为**白色**
-    // ② 被光照射到的位置，再从白色变为**光的颜色**
-    // 白色作为中间态使染色清晰可辨（深灰底上几乎看不出颜色变化）
+    // ① 长按期间，四个图标与文字整体转入一个"高对比中间态"
+    // ② 被光照射到的位置，再从该中间态变为**光的颜色**
+    //
+    // 中间态必须按主题自适应：
+    // - 深色主题：转**白色**（深底上白色让光色变化清晰可辨）
+    // - 浅色主题：转**深色**——若同样转白，白图标落在浅色导航栏上
+    //   会直接看不见，表现为"长按后只有被光照到的才显示"
+    val darkTheme = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    val ambientTarget = if (darkTheme) {
+        Color.White
+    } else {
+        androidx.compose.ui.graphics.lerp(
+            MaterialTheme.colorScheme.onSurface, Color.Black, 0.25f
+        )
+    }
     val ambientColor = androidx.compose.ui.graphics.lerp(
-        normal, Color.White, amb
+        normal, ambientTarget, amb
     )
     // 染色过渡曲线：tint = 1-(1-l)²，与 pow(l, 0.55) 效果接近，
     // 让光色更早、更深地显现（纯算术实现，不依赖 math.pow）
