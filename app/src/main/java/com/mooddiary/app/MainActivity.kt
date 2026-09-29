@@ -1696,7 +1696,8 @@ fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) 
         val avg = days.map { moodOf(it.moodId).score }.average()
         // 占比最高的心情
         // 直接用预计算的计数，不再重复遍历
-        val topMood = stats.perDayCounts.maxByOrNull { it.value }
+        // 主要情绪同样按记录次数取（与分布、横幅同一口径）
+        val topMood = stats.entryCounts.maxByOrNull { it.value }
             ?.let { (id, _) -> moodOf(id) }
 
         // 主色横幅：一眼看到这个月的概况
