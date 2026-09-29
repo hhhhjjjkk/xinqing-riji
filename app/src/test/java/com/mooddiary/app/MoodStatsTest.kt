@@ -38,7 +38,8 @@ class MoodStatsTest {
         assertEquals(2, st.dayTotal)              // 共 2 天
         assertEquals(2, st.entryCounts[5])        // 开心 2 次
         assertEquals(1, st.entryCounts[1])        // 生气 1 次
-        assertEquals(2, st.moodCounts[5])         // 开心占 2 天（每天最新一条口径另存）
+        assertEquals(1, st.moodCounts[5])         // 按天数计：27 日是开心，26 日最后是生气 → 开心 1 天
+        assertEquals(1, st.moodCounts[1])         // 生气占 26 日 → 1 天
     }
 
     @Test
