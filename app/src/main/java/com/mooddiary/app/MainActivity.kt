@@ -1572,6 +1572,31 @@ private fun MoodTrendChart(
     }
 }
 
+/**
+ * 按「最大余数法」把计数分配成整数百分比，保证各项之和精确为 100。
+ *
+ * 直接对各百分比取整数会因截断导致总和不足 100%（例如 33.3+33.3+33.3
+ * 各自取整为 33，合计 99）。这里先按整数部分分配，再把余下的名额
+ * 依次给小数部分最大的项，从而总和恒为 100。
+ */
+internal fun integerPercent(counts: Map<Int, Int>, total: Int): Map<Int, Int> {
+    if (total <= 0) return counts.keys.associateWith { 0 }
+    val exact = counts.mapValues { (_, c) -> c.toDouble() * 100.0 / total.toDouble() }
+    val floors = exact.mapValues { (_, v) -> kotlin.math.floor(v).toInt() }
+    var used = floors.values.sum()
+    val remainder = 100 - used
+    if (remainder <= 0) return floors
+    // 按小数部分从大到小，补足剩余名额
+    val order = exact.keys.sortedByDescending { k -> exact[k]!! - kotlin.math.floor(exact[k]!!) }
+    val out = floors.toMutableMap()
+    for (i in 0 until remainder) {
+        if (i >= order.size) break
+        val k = order[i]
+        out[k] = (out[k] ?: 0) + 1
+    }
+    return out
+}
+
 /** 当月统计结果 */
 data class MonthStats(
     val inMonth: List<MoodEntry>,
@@ -1580,10 +1605,14 @@ data class MonthStats(
     val latestByDayMap: Map<String, MoodEntry>,
     /** 每天的均分（按日升序），用于趋势图 */
     val dailyScores: List<Pair<LocalDate, Float>>,
-    /** 每种心情的计数（按“每天最新一条”计，与展示用的天数同一口径） */
+    /** 每种心情的天数（每天取最新一条；供热力图/日历口径使用） */
     val moodCounts: Map<Int, Int>,
-    /** 全部记录的计数（按“每天最新一条”计，避免分子分母口径不一致） */
-    val perDayCounts: Map<Int, Int>
+    /** 每种心情的记录次数（当月全部记录，同一天多条都计入） */
+    val entryCounts: Map<Int, Int>,
+    /** 当月记录总条数 */
+    val entryTotal: Int,
+    /** 有记录的天数 */
+    val dayTotal: Int
 )
 
 /**
@@ -1595,10 +1624,12 @@ data class MonthStats(
 internal fun computeMonthStats(entries: List<MoodEntry>, month: YearMonth): MonthStats {
     val inMonth = ArrayList<MoodEntry>()
     val latestByDay = HashMap<String, MoodEntry>()
+    val entryCounts = HashMap<Int, Int>()      // 按「记录次数」计（全量）
     for (e in entries) {
         val d = runCatching { LocalDate.parse(e.date) }.getOrNull() ?: continue
         if (YearMonth.from(d) != month) continue
         inMonth += e
+        entryCounts[e.moodId] = (entryCounts[e.moodId] ?: 0) + 1
 
         val prev = latestByDay[e.date]
         if (prev == null || e.hour > prev.hour) latestByDay[e.date] = e
@@ -1622,7 +1653,9 @@ internal fun computeMonthStats(entries: List<MoodEntry>, month: YearMonth): Mont
         latestByDayMap = latestByDay,
         dailyScores = daily,
         moodCounts = perDayCounts,
-        perDayCounts = perDayCounts
+        entryCounts = entryCounts,
+        entryTotal = inMonth.size,
+        dayTotal = latestList.size
     )
 }
 
@@ -1742,10 +1775,15 @@ fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) 
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            // 分布按「实际记录次数」统计：记了几条就是几次，
+            // 与横幅「共记录 X 条」同一口径（此前按天数算，导致与
+            // 实际添加的数量对不上）。
+            val distTotal = stats.entryTotal
+            // 百分比用最大余数法分配整数，保证各项之和精确等于 100%
+            val pctById = integerPercent(stats.entryCounts, distTotal)
             moods.forEach { m ->
-                // 直接用单次遍历时统计好的计数，不再重复遍历
-                val count = stats.moodCounts[m.id] ?: 0
-                val pct = if (days.isEmpty()) 0f else count.toFloat() / days.size
+                val count = stats.entryCounts[m.id] ?: 0
+                val pct = pctById[m.id] ?: 0
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(m.emoji, fontSize = 22.sp, modifier = Modifier.width(34.dp))
                     Column(Modifier.weight(1f)) {
@@ -1753,7 +1791,7 @@ fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) 
                             Text(m.label, fontWeight = FontWeight.Medium)
                             Spacer(Modifier.width(6.dp))
                             Text(
-                                "${(pct * 100).toInt()}%",
+                                "${pct}%",
                                 color = MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.Bold
                             )
@@ -1765,16 +1803,18 @@ fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) 
                         ) {
                             // 0% 就完全不画：之前 coerceIn(0.01f, 1f) 把 0 强制成
                             // 1% 的宽度，导致占比为 0 时进度条仍有残留
-                            if (count > 0) {
+                            // 0% 完全不画，0 次也不画，避免出现残留
+                            if (count > 0 && pct > 0) {
                                 Box(
-                                    Modifier.fillMaxWidth(pct.coerceIn(0f, 1f)).height(8.dp)
+                                    Modifier.fillMaxWidth((pct / 100f).coerceIn(0f, 1f))
+                                        .height(8.dp)
                                         .clip(CircleShape).background(m.color)
                                 )
                             }
                         }
                     }
                     Text(
-                        "${count} 天",
+                        "${count} 次",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.width(44.dp)

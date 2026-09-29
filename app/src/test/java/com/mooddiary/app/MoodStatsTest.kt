@@ -24,18 +24,21 @@ class MoodStatsTest {
     private fun compute(entries: List<MoodEntry>) = computeMonthStats(entries, month)
 
     @Test
-    fun `分布分子与分母使用同一口径`() {
-        // 26 日：10 点记录开心(5)，20 点记录生气(1) → 当天最新为生气
+    fun `分布按实际记录次数统计`() {
+        // 26 日：10 点开心(5)、20 点生气(1)；27 日：开心(5)
+        // 分布应按「记录次数」：开心 2 次、生气 1 次（共 3 条）
         val entries = listOf(
             entry(LocalDate.of(2026, 9, 26), 10, 5),
-            entry(LocalDate.of(2026, 9, 26), 20, 1)
+            entry(LocalDate.of(2026, 9, 26), 20, 1),
+            entry(LocalDate.of(2026, 9, 27), 8, 5)
         )
         val st = compute(entries)
 
-        assertEquals(1, st.latestPerDay.size)                 // 一天只算一条
-        assertEquals(1, st.moodCounts[1])                     // 生气 1 天
-        assertEquals(null, st.moodCounts[5])                  // 被覆盖的开心不参与分布
-        assertTrue(st.moodCounts.values.sum() == st.latestPerDay.size)
+        assertEquals(3, st.entryTotal)            // 共 3 条
+        assertEquals(2, st.dayTotal)              // 共 2 天
+        assertEquals(2, st.entryCounts[5])        // 开心 2 次
+        assertEquals(1, st.entryCounts[1])        // 生气 1 次
+        assertEquals(2, st.moodCounts[5])         // 开心占 2 天（每天最新一条口径另存）
     }
 
     @Test
@@ -47,8 +50,24 @@ class MoodStatsTest {
             entry(LocalDate.of(2026, 9, 4), 11, 3)
         )
         val st = compute(entries)
-        assertEquals(4, st.latestPerDay.size)
-        assertEquals(4, st.moodCounts.values.sum())
+        assertEquals(4, st.entryTotal)
+        assertEquals(4, st.entryCounts.values.sum())
+    }
+
+    /** 整数百分比之和必须精确为 100（避免逐项取整导致的 99%） */
+    @Test
+    fun `整数百分比之和精确为一百`() {
+        // 三等分：逐项 toInt 会得到 33+33+33=99
+        val p = integerPercent(mapOf(5 to 1, 4 to 1, 3 to 1), 3)
+        assertEquals(100, p.values.sum())
+
+        // 7 条分成 3/2/2
+        val p2 = integerPercent(mapOf(5 to 3, 4 to 2, 3 to 2), 7)
+        assertEquals(100, p2.values.sum())
+
+        // 单条
+        val p3 = integerPercent(mapOf(5 to 1), 1)
+        assertEquals(100, p3.values.sum())
     }
 
     @Test
