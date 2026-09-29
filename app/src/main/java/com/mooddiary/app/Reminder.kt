@@ -45,7 +45,7 @@ object Reminder {
      * 通知里的表情按钮。按分值倒序，最多 5 个（RemoteViews 布局只有 5 个槽位）。
      * 跟随用户自定义的心情目录，而不是写死的 5 个内置心情。
      */
-    private fun notificationMoods(context: Context): List<Pair<Int, String>> =
+    private fun notificationMoods(): List<Pair<Int, String>> =
         moods.sortedByDescending { it.score }
             .take(5)
             .map { it.id to it.emoji }
@@ -187,7 +187,7 @@ object Reminder {
             R.id.notification_title,
             "现在心情怎么样？点一个表情，记录 ${String.format(Locale.CHINA, "%02d:00", hour)} 的心情"
         )
-        notificationMoods(context).forEach { (moodId, _) ->
+        notificationMoods().forEach { (moodId, _) ->
             val pending = PendingIntent.getBroadcast(
                 context,
                 moodId * 100 + hour,
