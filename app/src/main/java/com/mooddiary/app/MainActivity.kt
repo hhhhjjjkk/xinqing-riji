@@ -132,9 +132,23 @@ interface MoodDao {
     @Query("SELECT id FROM mood_entries WHERE date = :date AND hour = :hour LIMIT 1")
     fun findByDateHourSync(date: String, hour: Int): Long?
 
-    /** 全量同步读取：启动时做一次性数据修复用 */
-    @Query("SELECT * FROM mood_entries")
-    fun getAllSync(): List<MoodEntry>
+    /**
+     * 只取出引用了「当前目录中不存在的心情」的记录。
+     *
+     * 启动时的数据修复原先用全量查询把所有记录读进内存再逐条比对，
+     * 记录多时既慢又占内存；改为在 SQL 层过滤，
+     * 正常情况下（无需修复）返回空列表，开销接近零。
+     */
+    @Query("SELECT * FROM mood_entries WHERE moodId NOT IN (:validIds)")
+    fun findWithUnknownMood(validIds: List<Int>): List<MoodEntry>
+
+    /**
+     * 一次删除全部记录。
+     * 原先「清空所有记录」是对每条记录调用一次 delete，
+     * 数据多时会产生成百上千次事务；改为单条 SQL 一次完成。
+     */
+    @Query("DELETE FROM mood_entries")
+    suspend fun deleteAll()
 
     /** ABORT：冲突时抛异常而不是替换，配合上层显式冲突处理，避免静默丢数据 */
     @Insert(onConflict = OnConflictStrategy.ABORT)
@@ -175,6 +189,7 @@ interface MoodStore {
     suspend fun insert(entry: MoodEntry)
     suspend fun update(entry: MoodEntry)
     suspend fun delete(entry: MoodEntry)
+    suspend fun deleteAll()
     suspend fun <R> transaction(block: suspend () -> R): R
 }
 
@@ -185,6 +200,7 @@ class RoomMoodStore(private val db: MoodDatabase) : MoodStore {
     override suspend fun insert(entry: MoodEntry) { dao.insert(entry) }
     override suspend fun update(entry: MoodEntry) { dao.update(entry) }
     override suspend fun delete(entry: MoodEntry) { dao.delete(entry) }
+    override suspend fun deleteAll() { dao.deleteAll() }
     override suspend fun <R> transaction(block: suspend () -> R): R = db.withTransaction { block() }
 }
 
@@ -239,6 +255,9 @@ class MoodRepository(private val store: MoodStore) {
     }
 
     suspend fun delete(entry: MoodEntry) = store.delete(entry)
+
+    /** 一次清空：单条 SQL，避免逐条删除产生大量事务 */
+    suspend fun deleteAll() = store.deleteAll()
 }
 
 class MoodViewModel(application: Application) : AndroidViewModel(application) {
@@ -255,6 +274,12 @@ class MoodViewModel(application: Application) : AndroidViewModel(application) {
     ) = repo.overwrite(date, hour, moodId, note, old, conflict)
 
     fun delete(entry: MoodEntry) = viewModelScope.launch { repo.delete(entry) }
+
+    /** 清空所有记录：走批量删除，并在完成后回调 */
+    fun clearAll(onDone: () -> Unit = {}) = viewModelScope.launch {
+        repo.deleteAll()
+        onDone()
+    }
 }
 
 data class Mood(val id: Int, val label: String, val emoji: String, val color: Color, val score: Int)
@@ -289,7 +314,17 @@ var moods by mutableStateOf(defaultMoods)
  * 改为按分值就近回退：用失配 id 在「默认目录」中的分值，
  * 找当前目录里分值最接近的那个。若目录为空再回退到居中项。
  */
-fun moodOf(id: Int): Mood = moodOfIn(id, moods, defaultMoods)
+/**
+ * id → Mood 的索引。
+ *
+ * moodOf 在列表渲染、统计计算等循环里被频繁调用，
+ * 原先每次都要线性扫描整个目录；改为查表后为 O(1)。
+ * 目录被改写时由 [applyMoods] 触发重建。
+ */
+private var moodIndex: Map<Int, Mood> = defaultMoods.associateBy { it.id }
+
+fun moodOf(id: Int): Mood =
+    moodIndex[id] ?: moodOfIn(id, moods, defaultMoods)
 
 /** [moodOf] 的纯函数版本：显式传入目录，便于单元测试 */
 internal fun moodOfIn(id: Int, catalog: List<Mood>, defaults: List<Mood>): Mood {
@@ -312,6 +347,7 @@ internal fun moodOfIn(id: Int, catalog: List<Mood>, defaults: List<Mood>): Mood 
 fun applyMoods(next: List<Mood>) {
     if (next.isNotEmpty()) {
         moods = next
+        moodIndex = next.associateBy { it.id }   // 重建查找索引
         moodEpoch++
     }
 }
@@ -345,7 +381,8 @@ class MainActivity : ComponentActivity() {
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             runCatching {
                 val dao = MoodDatabase.get(applicationContext).dao()
-                val broken = dao.getAllSync().filter { e -> moods.none { m -> m.id == e.moodId } }
+                // 让 SQL 只返回真正失配的行；无需修复时为空，几乎没有开销
+                val broken = dao.findWithUnknownMood(moods.map { it.id })
                 broken.forEach { e ->
                     dao.update(e.copy(moodId = moodOf(e.moodId).id))
                 }
@@ -695,10 +732,9 @@ fun MoodDiaryApp(
                     store = store,
                     recordCount = entries.size,
                     onClearAll = {
-                        scope.launch {
-                            entries.forEach { vm.delete(it) }
-                            toast(context, "已清空全部记录")
-                        }
+                        // 批量删除（单条 SQL）：原先逐条 delete 会产生
+                        // 与记录数相同数量的事务，记录多时明显卡顿
+                        vm.clearAll { toast(context, "已清空全部记录") }
                     }
                 )
             }

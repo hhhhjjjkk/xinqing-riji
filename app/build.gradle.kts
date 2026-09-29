@@ -34,8 +34,8 @@ android {
         applicationId = "com.mooddiary.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 61
-        versionName = "4.5.2"
+        versionCode = 62
+        versionName = "4.6.0"
     }
     signingConfigs {
         if (hasReleaseSigning) {
@@ -49,7 +49,16 @@ android {
     }
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // 开启 R8：裁剪未引用的类与方法。
+            // 此前为 false，导致上万个未使用的图标与整库未引用代码被打包，
+            // dex 体积达 38.6MB（安装后占用主要来源）。
+            isMinifyEnabled = true
+            // 同时裁剪未被引用的资源
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             } else {
@@ -85,7 +94,6 @@ dependencies {
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     kapt("androidx.room:room-compiler:2.6.1")
-    implementation("androidx.work:work-runtime-ktx:2.9.1")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
     debugImplementation("androidx.compose.ui:ui-tooling")
 

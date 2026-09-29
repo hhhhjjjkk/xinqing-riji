@@ -43,6 +43,10 @@ class FakeMoodStore : MoodStore {
         state.value = state.value.filterNot { it.id == entry.id }
     }
 
+    override suspend fun deleteAll() {
+        state.value = emptyList()
+    }
+
     override suspend fun <R> transaction(block: suspend () -> R): R {
         val snapshot = state.value
         val snapshotId = nextId
