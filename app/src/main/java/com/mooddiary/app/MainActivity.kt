@@ -643,15 +643,22 @@ fun MoodDiaryApp(
             }
         }
     ) { padding ->
-        // 统一使用 surface 作为整页背景，与顶部栏/底部栏完全同色。
-        // 之前这里单独铺了一层强调色渐变，而顶栏底栏没有，
-        // 交界处就有色差 —— 这就是"割裂感"的来源，现已移除。
+        // 页面背景：在 surface 上叠一层极淡的强调色渐变（顶部稍亮、底部回到
+        // 纯 surface），让整页有层次而不显割裂——顶部栏与导航条也随渐变
+        // 轻微过渡，但整体仍是同色系，不会出现硬边界。
+        val pageBgTop = MaterialTheme.colorScheme.primary
+            .copy(alpha = if (MaterialTheme.colorScheme.surface.luminance() < 0.5f) 0.10f else 0.07f)
+            .compositeOver(MaterialTheme.colorScheme.surface)
         HorizontalPager(
             state = pagerState,
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
-                .background(MaterialTheme.colorScheme.surface),
+                .background(
+                    androidx.compose.ui.graphics.Brush.verticalGradient(
+                        listOf(pageBgTop, MaterialTheme.colorScheme.surface)
+                    )
+                ),
             verticalAlignment = Alignment.Top
         ) { page ->
             when (page) {
@@ -1260,6 +1267,7 @@ private fun ConflictDialog(pending: PendingConflict, onCancel: () -> Unit, onOve
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CalendarPage(
     month: YearMonth,
@@ -1330,13 +1338,40 @@ fun CalendarPage(
                 }
             }
         }
-        Spacer(Modifier.height(8.dp))
-        Text("点击某天 → 按小时记录心情", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(
-            "颜色说明：" + moods.joinToString("  ") { "${it.emoji}${it.label}" },
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        Spacer(Modifier.height(10.dp))
+        // 提示与图例：放入淡底卡片，比两行裸文字更整齐易读
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                .padding(12.dp)
+        ) {
+            Text(
+                "点击某天 → 按小时记录心情",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(6.dp))
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                moods.forEach { m ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            Modifier.size(10.dp).clip(CircleShape).background(m.color)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            "${m.emoji}${m.label}",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1353,13 +1388,16 @@ fun CalendarCell(
     val bg = mood?.color ?: MaterialTheme.colorScheme.surfaceVariant
     val textColor =
         if (mood != null && bg.luminance() < .55f) Color.White else MaterialTheme.colorScheme.onSurface
+    // 今天：强调色圆角框 + 底部小圆点提示；未记录的日子用更淡的底色，
+    // 与已记录的心情色块拉开层次，整个月历看起来更有呼吸感
     Box(
         Modifier.fillMaxSize()
-            .clip(RoundedCornerShape(10.dp))
-            .background(bg)
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (mood == null) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f) else bg)
             .then(
-                if (today) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(10.dp))
-                else Modifier
+                if (today) Modifier.border(
+                    2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp)
+                ) else Modifier
             )
             .pressBounce(pressedScale = 0.90f)
             .clickable(onClick = click),
@@ -1368,10 +1406,21 @@ fun CalendarCell(
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 date.dayOfMonth.toString(),
-                color = textColor,
+                color = if (mood == null && !today) MaterialTheme.colorScheme.onSurfaceVariant else textColor,
                 fontWeight = if (today) FontWeight.Bold else FontWeight.Normal
             )
             if (mood != null && showEmoji) Text(mood.emoji, fontSize = 15.sp)
+            // 今天的底部小圆点：一眼定位"现在"
+            if (today) {
+                Spacer(Modifier.height(2.dp))
+                Box(
+                    Modifier.size(5.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (mood != null) textColor else MaterialTheme.colorScheme.primary
+                        )
+                )
+            }
             // 可选：在格子里显示备注摘要
             if (showNote && entry != null && entry.note.isNotBlank()) {
                 Text(
@@ -1461,10 +1510,22 @@ fun RecordsPage(entries: List<MoodEntry>, open: (MoodEntry) -> Unit) {
             Card(
                 Modifier
                     .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
                     .pressBounce(pressedScale = 0.97f)
-                    .clickable { open(e) }
+                    .clickable { open(e) },
+                shape = RoundedCornerShape(16.dp)
             ) {
-                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 左侧心情色竖条：一眼识别心情类别
+                    Box(
+                        Modifier.width(4.dp).height(40.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(m.color)
+                    )
+                    Spacer(Modifier.width(12.dp))
                     Text(m.emoji, fontSize = 30.sp)
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
@@ -1681,10 +1742,20 @@ fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) 
             Arrangement.SpaceBetween, Alignment.CenterVertically
         ) {
             TextButton(onClick = { setMonth(month.minusMonths(1)) }) { Text("‹ 上月") }
-            Text(
-                "${month.year} 年 ${month.monthValue} 月",
-                style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold
-            )
+            // 月份放入强调色淡底胶囊，视觉焦点更明确
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(percent = 50))
+                    .background(accent.copy(alpha = 0.14f))
+                    .padding(horizontal = 18.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    "${month.year} 年 ${month.monthValue} 月",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = accent
+                )
+            }
             TextButton(onClick = { setMonth(month.plusMonths(1)) }) { Text("下月 ›") }
         }
 
@@ -1706,7 +1777,16 @@ fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) 
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
                 .clip(RoundedCornerShape(24.dp))
-                .background(accent)
+                // 斜向高光：左上更亮、右下略暗，横幅更有立体层次
+                .background(
+                    androidx.compose.ui.graphics.Brush.linearGradient(
+                        listOf(
+                            androidx.compose.ui.graphics.lerp(accent, Color.White, 0.22f),
+                            accent,
+                            androidx.compose.ui.graphics.lerp(accent, Color.Black, 0.14f)
+                        )
+                    )
+                )
                 .padding(20.dp)
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1800,7 +1880,9 @@ fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) 
                         Spacer(Modifier.height(4.dp))
                         Box(
                             Modifier.fillMaxWidth().height(8.dp).clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .background(
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                                )
                         ) {
                             // 0% 就完全不画：之前 coerceIn(0.01f, 1f) 把 0 强制成
                             // 1% 的宽度，导致占比为 0 时进度条仍有残留
@@ -1847,7 +1929,12 @@ fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) 
                     Modifier
                         .size(40.dp)
                         .clip(RoundedCornerShape(12.dp))
-                        .background(mood?.color ?: MaterialTheme.colorScheme.surfaceVariant)
+                        // 已记录 = 心情实色；未记录 = 淡化底色，
+                        // 让有数据的日子自然跳出来
+                        .background(
+                            mood?.color
+                                ?: MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                        )
                         .then(
                             if (isToday) Modifier.border(
                                 2.dp, accent, RoundedCornerShape(12.dp)
@@ -1861,7 +1948,7 @@ fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) 
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = if (mood != null && mood.color.luminance() < .55f) Color.White
-                            else MaterialTheme.colorScheme.onSurfaceVariant
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
                         )
                         if (mood != null) Text(mood.emoji, fontSize = 10.sp)
                     }
@@ -1874,16 +1961,28 @@ fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) 
 }
 
 @Composable
+@Composable
 fun EmptyState(title: String, subtitle: String) {
+    val accent = MaterialTheme.colorScheme.primary
     Column(
         Modifier.fillMaxWidth().padding(top = 70.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text("✦", fontSize = 48.sp)
-        Spacer(Modifier.height(10.dp))
+        // 图标置于强调色柔和圆底中，空状态不再只是两行文字
+        Box(
+            Modifier
+                .size(96.dp)
+                .clip(CircleShape)
+                .background(accent.copy(alpha = 0.12f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("✦", fontSize = 42.sp, color = accent)
+        }
+        Spacer(Modifier.height(16.dp))
         Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(6.dp))
         Text(
-            subtitle, Modifier.padding(16.dp),
+            subtitle, Modifier.padding(horizontal = 24.dp),
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -1939,17 +2038,32 @@ fun MoodDialog(
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
+                                .clip(RoundedCornerShape(14.dp))
                                 .then(
-                                    if (selected == m.id) Modifier.background(m.color.copy(alpha = .25f))
+                                    if (selected == m.id) Modifier
+                                        .background(m.color.copy(alpha = .22f))
+                                        .border(
+                                            2.dp,
+                                            m.color,
+                                            RoundedCornerShape(14.dp)
+                                        )
                                     else Modifier
                                 )
                                 .pressBounce(pressedScale = 0.88f)
                                 .clickable { selected = m.id }
-                                .padding(5.dp)
+                                .padding(6.dp)
                         ) {
-                            Text(m.emoji, fontSize = 25.sp)
-                            Text(m.label, fontSize = 10.sp)
+                            Text(
+                                m.emoji,
+                                fontSize = if (selected == m.id) 28.sp else 25.sp
+                            )
+                            Text(
+                                m.label,
+                                fontSize = 10.sp,
+                                color = if (selected == m.id) m.color
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = if (selected == m.id) FontWeight.Bold else FontWeight.Normal
+                            )
                         }
                     }
                 }
