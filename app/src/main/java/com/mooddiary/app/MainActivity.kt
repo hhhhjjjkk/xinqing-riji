@@ -589,12 +589,36 @@ fun MoodDiaryApp(
     // （animateScrollToPage 会取消并重建动画，连点会显得迟滞）
     var pendingPage by remember { mutableIntStateOf(startTab) }
 
+    // 整屏一条连续渐变：从顶部的强调色淡染平滑过渡到底部的纯表面色。
+    // 铺在 Scaffold 之下、贯穿状态栏/顶栏/内容区，因此任何两段之间
+    // 都是同一条渐变上的取值，不会出现色带接缝。
+    // 渐变在约 40% 处就已回到纯 surface，所以底部导航条所在区域与
+    // 原来完全一致，导航条观感不受影响。
+    val bgSurface = MaterialTheme.colorScheme.surface
+    val bgTop = MaterialTheme.colorScheme.primary
+        .copy(alpha = if (bgSurface.luminance() < 0.5f) 0.14f else 0.09f)
+        .compositeOver(bgSurface)
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(
+                androidx.compose.ui.graphics.Brush.verticalGradient(
+                    0.00f to bgTop,
+                    0.40f to bgSurface,
+                    1.00f to bgSurface
+                )
+            )
+    ) {
     Scaffold(
-        // 整页统一用 surface，顶栏底栏内容区同色，不产生任何交界色差
-        containerColor = MaterialTheme.colorScheme.surface,
+        // 透明容器：让底层那条连续渐变透出来
+        containerColor = Color.Transparent,
         topBar = {
             CenterAlignedTopAppBar(
                 title = { Text("心情日记", fontWeight = FontWeight.Bold) },
+                // 顶栏透明，与内容区共用同一条渐变，消除顶栏下方的横向色带
+                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                    containerColor = Color.Transparent
+                ),
                 actions = { if (pagerState.currentPage != 3) ReminderToggle(store) }
             )
         },
@@ -643,22 +667,11 @@ fun MoodDiaryApp(
             }
         }
     ) { padding ->
-        // 页面背景：在 surface 上叠一层极淡的强调色渐变（顶部稍亮、底部回到
-        // 纯 surface），让整页有层次而不显割裂——顶部栏与导航条也随渐变
-        // 轻微过渡，但整体仍是同色系，不会出现硬边界。
-        val pageBgTop = MaterialTheme.colorScheme.primary
-            .copy(alpha = if (MaterialTheme.colorScheme.surface.luminance() < 0.5f) 0.10f else 0.07f)
-            .compositeOver(MaterialTheme.colorScheme.surface)
         HorizontalPager(
             state = pagerState,
             modifier = Modifier
                 .padding(padding)
-                .fillMaxSize()
-                .background(
-                    androidx.compose.ui.graphics.Brush.verticalGradient(
-                        listOf(pageBgTop, MaterialTheme.colorScheme.surface)
-                    )
-                ),
+                .fillMaxSize(),
             verticalAlignment = Alignment.Top
         ) { page ->
             when (page) {
@@ -691,6 +704,7 @@ fun MoodDiaryApp(
             }
         }
     }
+    }   // 关闭整屏渐变 Box
 
     hourSheetDate?.let { d ->
         HourMoodSheet(

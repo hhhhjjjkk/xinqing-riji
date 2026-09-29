@@ -34,8 +34,8 @@ android {
         applicationId = "com.mooddiary.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 59
-        versionName = "4.5.0"
+        versionCode = 60
+        versionName = "4.5.1"
     }
     signingConfigs {
         if (hasReleaseSigning) {
