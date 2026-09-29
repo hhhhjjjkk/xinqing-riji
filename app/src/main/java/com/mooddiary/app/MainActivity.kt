@@ -1961,7 +1961,6 @@ fun StatsPage(month: YearMonth, entries: List<MoodEntry>, setMonth: (YearMonth) 
 }
 
 @Composable
-@Composable
 fun EmptyState(title: String, subtitle: String) {
     val accent = MaterialTheme.colorScheme.primary
     Column(
