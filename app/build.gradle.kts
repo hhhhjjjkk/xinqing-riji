@@ -34,8 +34,8 @@ android {
         applicationId = "com.mooddiary.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 62
-        versionName = "4.6.0"
+        versionCode = 63
+        versionName = "4.6.1"
     }
     signingConfigs {
         if (hasReleaseSigning) {
@@ -49,16 +49,19 @@ android {
     }
     buildTypes {
         release {
-            // 开启 R8：裁剪未引用的类与方法。
-            // 此前为 false，导致上万个未使用的图标与整库未引用代码被打包，
-            // dex 体积达 38.6MB（安装后占用主要来源）。
-            isMinifyEnabled = true
-            // 同时裁剪未被引用的资源
-            isShrinkResources = true
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+            // 体积优化策略说明：
+            //
+            // 安装体积的大头是 material-icons-extended（34MB，含上万个图标），
+            // 本项目只用到其中 4 个。因此改为「自建这 4 个图标 + 移除整个库」，
+            // 即可拿回绝大部分体积收益。
+            //
+            // 而 R8 代码裁剪虽然能再省一点，但会重命名 Compose 运行时
+            // （androidx.compose.runtime 有两千余个类参与），
+            // 曾经导致「点进应用直接闪退」。考虑到收益有限、风险很高，
+            // 这里保持关闭。若日后要开启，必须先在真机上完整回归
+            // （特别是启动、通知、设置页、数据库读写）。
+            isMinifyEnabled = false
+            isShrinkResources = false
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             } else {
@@ -90,7 +93,10 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.material:material-icons-extended")
+    // 说明：这里刻意不引入 material-icons-extended。
+    // 该库打包了上万个图标、体积达 34MB，而本项目只用到其中 4 个
+    // （其余 6 个 material-icons-core 已内置，随 material3 提供）。
+    // 那 4 个图标已在 icons/ExtraIcons.kt 中按官方矢量路径自建。
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     kapt("androidx.room:room-compiler:2.6.1")

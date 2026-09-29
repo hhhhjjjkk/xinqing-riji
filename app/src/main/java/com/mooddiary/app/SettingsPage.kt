@@ -25,7 +25,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -434,7 +433,7 @@ fun SettingsPage(
                 ),
                 modifier = Modifier.pressBounce(pressedScale = 0.94f)
             ) {
-                Icon(Icons.Default.DeleteForever, null)
+                Icon(com.mooddiary.app.icons.ExtraIcons.DeleteForever, null)
                 Spacer(Modifier.width(6.dp))
                 Text("清空所有记录")
             }

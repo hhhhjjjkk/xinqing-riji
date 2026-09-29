@@ -605,9 +605,9 @@ fun MoodDiaryApp(
     }
 
     val navItems = listOf(
-        "日历" to Icons.Default.CalendarMonth,
+        "日历" to com.mooddiary.app.icons.ExtraIcons.CalendarMonth,
         "记录" to Icons.AutoMirrored.Filled.List,
-        "统计" to Icons.Default.BarChart,
+        "统计" to com.mooddiary.app.icons.ExtraIcons.BarChart,
         "设置" to Icons.Default.Settings
     )
 
@@ -2172,7 +2172,7 @@ fun ReminderToggle(store: SettingsStore) {
         }
     }) {
         Icon(
-            if (reminderEnabled) Icons.Default.Notifications else Icons.Default.NotificationsOff,
+            if (reminderEnabled) Icons.Default.Notifications else com.mooddiary.app.icons.ExtraIcons.NotificationsOff,
             if (reminderEnabled) "关闭每小时提醒" else "开启每小时提醒",
             tint = if (reminderEnabled) MaterialTheme.colorScheme.primary
             else MaterialTheme.colorScheme.onSurfaceVariant
