@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -229,14 +230,19 @@ object MoodCatalog {
             if (f.size < 5) return@mapNotNull null
             val id = f[0].toIntOrNull() ?: return@mapNotNull null
             val score = f[4].toIntOrNull() ?: return@mapNotNull null
-            val argb = f[3].toLongOrNull() ?: return@mapNotNull null
-            Mood(
-                id = id,
-                label = f[1],
-                emoji = f[2],
-                color = Color(argb.toULong().toLong()),
-                score = score
-            )
+
+            // 颜色兼容两种历史格式：
+            // 新版存 ARGB 的 Int 文本（可能为负）；旧版存 Color.value（ULong），
+            // 其值最大可达 18446744073709551615，超出 Long 范围，
+            // 直接 toLong 会溢出。旧格式取高 32 位即为原始 ARGB。
+            // 颜色解析失败时退回该心情的分值色，而不是丢掉这一行——
+            // 丢掉会导致整份目录为空、用户添加的心情全部消失
+            val color = decodeColor(f[3]) ?: run {
+                val fallback = ScoreColors.forScore(score)
+                fallback
+            }
+
+            Mood(id = id, label = f[1], emoji = f[2], color = color, score = score)
         }
         return list.ifEmpty { null }
     }
@@ -247,10 +253,28 @@ object MoodCatalog {
         val text = list.joinToString("\n") { m ->
             listOf(
                 m.id.toString(), m.label, m.emoji,
-                m.color.value.toString(), m.score.toString()
+                // 存 ARGB 的 Int 文本。
+                // 不能存 Color.value：它是打包后的 ULong，数值可超出 Long 范围
+                // （如 0xFFFFB300 打包后为 18446659411314212864），
+                // 写入文本后读取时会溢出，导致整份目录解析失败、
+                // 用户手动添加的心情在重启后全部消失。
+                m.color.toArgb().toString(), m.score.toString()
             ).joinToString(SEP)
         }
         prefs.edit().putString(KEY, text).commit()
+    }
+
+    /** 解析颜色；无法解析时返回 null 由调用方跳过该行 */
+    private fun decodeColor(raw: String): Color? {
+        // 新格式：32 位 ARGB 的十进制（可能为负）
+        raw.toIntOrNull()?.let { return Color(it) }
+        // 旧格式：Color.value 的 ULong 文本，可能溢出 Long；
+        // 用 BigInteger 兜住，再取高 32 位还原 ARGB
+        return runCatching {
+            val v = java.math.BigInteger(raw)
+            val argb = v.shiftRight(32).toLong() and 0xFFFFFFFFL
+            Color(argb.toInt())
+        }.getOrNull()
     }
 
     /** 恢复为内置默认 */
@@ -258,5 +282,16 @@ object MoodCatalog {
         val prefs = context.applicationContext
             .getSharedPreferences(SettingsStore.PREFS, Context.MODE_PRIVATE)
         prefs.edit().remove(KEY).commit()
+    }
+}
+
+/** 按分值给出兜底颜色：仅在旧数据颜色无法解析时使用 */
+private object ScoreColors {
+    fun forScore(score: Int): Color = when (score.coerceIn(1, 5)) {
+        5 -> Color(0xFFFFB300)
+        4 -> Color(0xFF43A047)
+        3 -> Color(0xFF78909C)
+        2 -> Color(0xFF42A5F5)
+        else -> Color(0xFFEF5350)
     }
 }
