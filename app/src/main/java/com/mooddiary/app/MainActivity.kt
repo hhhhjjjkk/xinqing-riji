@@ -2035,6 +2035,7 @@ fun EmptyState(title: String, subtitle: String) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MoodDialog(
     date: LocalDate,
@@ -2057,7 +2058,8 @@ fun MoodDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (entry == null) "记录心情" else "编辑心情") },
         text = {
-            Column {
+            // 内容可滚动：心情标签较多时也不会超出弹窗
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 OutlinedButton(
                     onClick = {
                         val c = d
@@ -2079,11 +2081,18 @@ fun MoodDialog(
 
                 Spacer(Modifier.height(10.dp))
                 Text("心情是？")
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                // 用 FlowRow 而非 Row：心情标签较多时自动换行，
+                // 原先固定单行 Row，标签一多就会被挤扁甚至溢出
+                FlowRow(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     moods.forEach { m ->
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier
+                                .widthIn(min = 60.dp)
                                 .clip(RoundedCornerShape(14.dp))
                                 .then(
                                     if (selected == m.id) Modifier

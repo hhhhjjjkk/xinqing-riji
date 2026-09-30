@@ -360,19 +360,26 @@ fun SettingsPage(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(10.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            // 用 FlowRow：心情标签较多时自动换行，避免固定单行被挤扁或溢出
+            FlowRow(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 moods.forEach { m ->
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
+                            .widthIn(min = 58.dp)
+                            .clip(RoundedCornerShape(12.dp))
                             .then(
                                 if (settings.defaultMoodId == m.id)
                                     Modifier.background(m.color.copy(alpha = .25f))
                                 else Modifier
                             )
+                            .pressBounce(pressedScale = 0.9f)
                             .clickable { store.setDefaultMood(m.id); android.widget.Toast.makeText(context, "默认心情：${m.label}", android.widget.Toast.LENGTH_SHORT).show() }
-                            .padding(5.dp)
+                            .padding(6.dp)
                     ) {
                         Text(m.emoji, fontSize = 25.sp)
                         Text(m.label, fontSize = 10.sp)
