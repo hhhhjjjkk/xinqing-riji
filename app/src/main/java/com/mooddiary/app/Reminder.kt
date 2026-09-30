@@ -33,6 +33,8 @@ object Reminder {
 
     const val CHANNEL_ID = "mood_hourly_reminder"
     private const val REQ_ALARM = 9001
+    /** 无精确闹钟权限时的触发窗口（15 分钟） */
+    private const val WINDOW_MS = 15 * 60 * 1000L
 
     /** 整点触发广播 */
     const val ACTION_TICK = "com.mooddiary.app.ACTION_REMINDER_TICK"
@@ -45,10 +47,14 @@ object Reminder {
      * 通知里的表情按钮。按分值倒序，最多 5 个（RemoteViews 布局只有 5 个槽位）。
      * 跟随用户自定义的心情目录，而不是写死的 5 个内置心情。
      */
-    private fun notificationMoods(): List<Pair<Int, String>> =
-        moods.sortedByDescending { it.score }
+    private fun notificationMoods(): List<Pair<Int, String>> {
+        // 正常情况下 moods 已由 MainActivity 载入自定义目录；
+        // 万一为空则退回内置默认，保证通知至少有表情按钮可用
+        val source = moods.ifEmpty { defaultMoods }
+        return source.sortedByDescending { it.score }
             .take(5)
             .map { it.id to it.emoji }
+    }
 
     /**
      * 开关状态的唯一真值在 SettingsStore 的 "app_settings"（key: reminder_enabled）。
@@ -110,18 +116,50 @@ object Reminder {
         return cal.timeInMillis
     }
 
+    /**
+     * 排下一次整点提醒。
+     *
+     * 关键修正（此前通知不响的根因）：
+     * 1. 不能对同一个 PendingIntent 既设精确闹钟又设重复闹钟——
+     *    后设的 setRepeating 会覆盖掉先设的 setExactAndAllowWhileIdle，
+     *    而 setRepeating 自 Android 4.4 起是不精确的，在 Doze 下会被系统推迟到维护窗口，
+     *    甚至整夜不触发。实际生效的其实是这个不可靠的重复闹钟，精确闹钟从未真正生效过。
+     *
+     * 2. 精确闹钟是一次性的，因此必须「链式」调度：本次触发后在 onTick 里再排下一次。
+     *
+     * 3. Android 12+ 若没有精确闹钟权限，改用 setWindow 的允许空闲触发（比 setRepeating 可靠得多），
+     *    并暴露 canScheduleExactAlarms 供界面提示用户去授权。
+     */
     fun schedule(context: Context) {
         val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val pi = alarmIntent(context)
         val triggerAt = nextHourMillis()
 
+        // 先清掉旧的，避免同一 PendingIntent 残留多个调度
+        am.cancel(pi)
+
         if (Build.VERSION.SDK_INT >= 31 && !am.canScheduleExactAlarms()) {
-            am.cancel(pi)
-            am.setRepeating(AlarmManager.RTC_WAKEUP, triggerAt, AlarmManager.INTERVAL_HOUR, pi)
+            // 无精确闹钟权限：用带窗口的「允许空闲时触发」。
+            // 比 setRepeating 可靠：系统会在窗口内唤醒，且 Doze 下仍有机会触发。
+            am.setWindow(
+                AlarmManager.RTC_WAKEUP,
+                triggerAt,
+                WINDOW_MS,
+                pi
+            )
             return
         }
+
+        // 有权限：单次精确闹钟（会在 Doze 下触发）。
+        // 注意：不要在此之后再设 setRepeating，否则会把它覆盖掉。
         am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
-        am.setRepeating(AlarmManager.RTC_WAKEUP, triggerAt, AlarmManager.INTERVAL_HOUR, pi)
+    }
+
+    /** Android 12+ 是否已获准使用精确闹钟；未获准时界面应引导用户开启 */
+    fun canScheduleExactAlarms(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < 31) return true
+        val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        return am.canScheduleExactAlarms()
     }
 
     fun cancel(context: Context) {

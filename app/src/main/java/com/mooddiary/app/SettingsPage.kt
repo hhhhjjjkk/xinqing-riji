@@ -1,5 +1,6 @@
 package com.mooddiary.app
 
+import android.content.Intent
 import androidx.compose.foundation.background
 import kotlin.math.roundToInt
 import androidx.compose.material3.Slider
@@ -285,6 +286,35 @@ fun SettingsPage(
         // 提醒可靠性
         if (settings.reminderEnabled) {
             SettingsSection("提醒可靠性", cornerDp = settings.cornerLevel.dp()) {
+                // 精确闹钟权限：Android 12+ 起默认可能未授予。
+                // 未授予时闹钟只能走「带窗口的近似触发」，可能被系统推迟，
+                // 这正是「加入白名单也不响」的常见原因，因此必须明确提示并给出入口。
+                if (!Reminder.canScheduleExactAlarms(context)) {
+                    Text(
+                        "缺少「精确闹钟」权限，提醒可能被系统推迟甚至不触发。请点下方按钮开启。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = {
+                            if (android.os.Build.VERSION.SDK_INT >= 31) {
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(
+                                            android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM
+                                        ).setData(
+                                            android.net.Uri.parse("package:${context.packageName}")
+                                        )
+                                    )
+                                }
+                            }
+                        },
+                        modifier = Modifier.pressBounce(pressedScale = 0.94f)
+                    ) { Text("开启精确闹钟权限") }
+                    Spacer(Modifier.height(12.dp))
+                }
+
                 Text(
                     "已使用精确闹钟，关掉 app、重启手机后仍会提醒。\n通知里可直接点表情快速记录，不用打开 app。",
                     style = MaterialTheme.typography.bodySmall,
