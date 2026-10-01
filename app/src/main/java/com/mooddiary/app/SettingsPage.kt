@@ -342,6 +342,49 @@ fun SettingsPage(
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
+
+                // —— 通知里显示哪些心情 ——
+                // 通知布局只有 5 个槽位，心情较多时原先按分值截断，
+                // 导致部分心情的图标不会出现在通知里。
+                // 这里让用户自己勾选，并明确提示上限。
+                HorizontalDivider(Modifier.padding(vertical = 10.dp))
+                SettingLabel("通知里显示的心情")
+                Text(
+                    "最多 5 个（通知宽度有限）。不选则自动使用分值最高的几个。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    moods.forEach { m ->
+                        val checked = settings.notifyMoodIds.contains(m.id)
+                        FilterChip(
+                            selected = checked,
+                            onClick = {
+                                val cur = settings.notifyMoodIds.toMutableList()
+                                if (checked) {
+                                    cur.remove(m.id)
+                                } else {
+                                    // 已达上限：先移除最早选的那个，再加入新的
+                                    if (cur.size >= 5) cur.removeAt(0)
+                                    cur.add(m.id)
+                                }
+                                store.setNotifyMoodIds(cur)
+                            },
+                            label = { Text("${m.emoji}${m.label}") },
+                            modifier = Modifier.pressBounce(pressedScale = 0.94f)
+                        )
+                    }
+                }
+                if (settings.notifyMoodIds.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = { store.setNotifyMoodIds(emptyList()) }) {
+                        Text("恢复自动")
+                    }
+                }
             }
         }
 

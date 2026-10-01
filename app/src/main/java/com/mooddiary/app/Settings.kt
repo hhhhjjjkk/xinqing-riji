@@ -75,6 +75,11 @@ data class AppSettings(
     val quietEnd: Int = 8,
     val defaultMoodId: Int = 5,
     val weekStart: WeekStart = WeekStart.SUNDAY,
+    /**
+     * 通知里显示的心情 id（按显示顺序）。为空表示「自动」：
+     * 取全部分值最高的若干个（受通知槽位上限约束）。
+     */
+    val notifyMoodIds: List<Int> = emptyList(),
     /** 光效强度 */
     val glowLevel: GlowLevel = GlowLevel.NORMAL,
     /** 卡片圆角大小 */
@@ -137,7 +142,10 @@ class SettingsStore(context: Context) {
         quietStart = prefs.getInt(KEY_QUIET_START, 22),
         quietEnd = prefs.getInt(KEY_QUIET_END, 8),
         defaultMoodId = prefs.getInt(KEY_DEFAULT_MOOD, 5),
-        weekStart = WeekStart.entries.getOrElse(prefs.getInt(KEY_WEEK_START, 0)) { WeekStart.SUNDAY }
+        weekStart = WeekStart.entries.getOrElse(prefs.getInt(KEY_WEEK_START, 0)) { WeekStart.SUNDAY },
+        notifyMoodIds = (prefs.getString(KEY_NOTIFY_MOODS, null) ?: "")
+            .split(',')
+            .mapNotNull { it.trim().toIntOrNull() }
     )
 
     private fun commit(block: SharedPreferences.Editor.() -> Unit) {
@@ -167,6 +175,10 @@ class SettingsStore(context: Context) {
     }
     fun setDefaultMood(moodId: Int) = commit { putInt(KEY_DEFAULT_MOOD, moodId) }
     fun setWeekStart(weekStart: WeekStart) = commit { putInt(KEY_WEEK_START, weekStart.ordinal) }
+    /** 设置通知里显示哪些心情（按传入顺序）；传空列表表示恢复「自动」 */
+    fun setNotifyMoodIds(ids: List<Int>) = commit {
+        putString(KEY_NOTIFY_MOODS, ids.joinToString(","))
+    }
 
     fun syncReminder() {
         if (read().reminderEnabled != Reminder.isEnabled(appContext)) {
@@ -184,6 +196,7 @@ class SettingsStore(context: Context) {
         private const val KEY_QUIET_END = "quiet_end"
         private const val KEY_DEFAULT_MOOD = "default_mood"
         private const val KEY_WEEK_START = "week_start"
+        private const val KEY_NOTIFY_MOODS = "notify_mood_ids"
         private const val KEY_ACCENT = "accent_color"
         private const val KEY_DYNAMIC = "dynamic_color"
         private const val KEY_START_TAB = "start_tab"

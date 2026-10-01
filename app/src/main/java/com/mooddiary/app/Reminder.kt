@@ -49,11 +49,26 @@ object Reminder {
      * 通知里的表情按钮。按分值倒序，最多 5 个（RemoteViews 布局只有 5 个槽位）。
      * 跟随用户自定义的心情目录，而不是写死的 5 个内置心情。
      */
-    private fun notificationMoods(): List<Mood> {
-        // 正常情况下 moods 已由 MainActivity 载入自定义目录；
-        // 万一为空则退回内置默认，保证通知至少有表情按钮可用
+    /**
+     * 通知里要显示的心情（最多 [SLOT_COUNT] 个，受通知布局槽位限制）。
+     *
+     * 优先级：
+     * 1. 若用户在设置里指定了「通知显示的心情」，按指定顺序取
+     * 2. 否则自动取分值最高的若干个
+     *
+     * 注意必须过滤掉当前目录中已不存在的心情，避免出现空白按钮。
+     */
+    private fun notificationMoods(context: Context): List<Mood> {
         val source = moods.ifEmpty { defaultMoods }
-        return source.sortedByDescending { it.score }.take(SLOT_COUNT)
+        val byId = source.associateBy { it.id }
+
+        val picked = SettingsStore(context).current().notifyMoodIds
+            .mapNotNull { byId[it] }        // 过滤已删除的心情
+            .take(SLOT_COUNT)
+
+        return picked.ifEmpty {
+            source.sortedByDescending { it.score }.take(SLOT_COUNT)
+        }
     }
 
     /**
@@ -230,7 +245,7 @@ object Reminder {
         // 按当前心情目录填充槽位（不再是写死的 5 个内置心情）：
         // 布局只提供槽位，表情、文字、点击目标全部在此绑定，
         // 因此自定义心情后通知显示的内容与实际记录的心情一致。
-        val moodsInNotif = notificationMoods()
+        val moodsInNotif = notificationMoods(context)
         val res = context.resources
         val pkg = context.packageName
         for (i in 0 until SLOT_COUNT) {
