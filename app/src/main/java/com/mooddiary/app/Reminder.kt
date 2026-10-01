@@ -35,10 +35,19 @@ object Reminder {
     private const val REQ_ALARM = 9001
     /** 无精确闹钟权限时的触发窗口（15 分钟） */
     private const val WINDOW_MS = 15 * 60 * 1000L
-    /** 通知里的心情按钮槽位数（与布局中的槽位数量一致） */
-    private const val SLOT_COUNT = 5
+    /** 通知里的心情按钮槽位数（与布局中的槽位数量一致；引用统一常量，避免多处各写） */
+    private val SLOT_COUNT = SettingsStore.NOTIFY_MOOD_MAX
     /** 通知快速记录 PendingIntent 的 requestCode 基址（与 REQ_ALARM 等拉开距离） */
     private const val RC_QUICK_MOOD_BASE = 10000
+
+    /**
+     * 通知 id。把「一年中的第几天」纳入，使每天的 id 都不相同。
+     *
+     * 原先直接用 hour 作为 id：跨天后同一个整点会复用相同 id，
+     * 从而替换掉昨天那条还没被划掉的通知，导致旧提醒无声消失。
+     */
+    fun notificationId(hour: Int): Int =
+        LocalDate.now().dayOfYear * 100 + hour
 
     /** 通知槽位的编译期 id 表（顺序与布局 slot_0..4 一致） */
     private val SLOT_BTN_IDS = intArrayOf(
@@ -321,7 +330,7 @@ object Reminder {
             .build()
 
         context.getSystemService(NotificationManager::class.java)
-            .notify(hour, notification)
+            .notify(notificationId(hour), notification)
     }
 
     /** 通知里点了表情：直接写库，不跳转 app */
@@ -344,7 +353,7 @@ object Reminder {
 
         // 取消通知：已记录，不再需要提醒
         context.getSystemService(NotificationManager::class.java)
-            .cancel(hour)
+            .cancel(notificationId(hour))
     }
 
     // ---------- 电池优化 ----------

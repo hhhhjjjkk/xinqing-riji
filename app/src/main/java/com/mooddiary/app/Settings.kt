@@ -146,6 +146,7 @@ class SettingsStore(context: Context) {
         notifyMoodIds = (prefs.getString(KEY_NOTIFY_MOODS, null) ?: "")
             .split(',')
             .mapNotNull { it.trim().toIntOrNull() }
+            .take(NOTIFY_MOOD_MAX)   // 与通知槽位上限保持一致，避免两处口径不一
     )
 
     private fun commit(block: SharedPreferences.Editor.() -> Unit) {
@@ -197,6 +198,9 @@ class SettingsStore(context: Context) {
         private const val KEY_DEFAULT_MOOD = "default_mood"
         private const val KEY_WEEK_START = "week_start"
         private const val KEY_NOTIFY_MOODS = "notify_mood_ids"
+
+        /** 通知里最多显示的心情数（受通知布局槽位限制） */
+        const val NOTIFY_MOOD_MAX = 5
         private const val KEY_ACCENT = "accent_color"
         private const val KEY_DYNAMIC = "dynamic_color"
         private const val KEY_START_TAB = "start_tab"

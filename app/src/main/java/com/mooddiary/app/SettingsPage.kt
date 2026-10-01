@@ -369,7 +369,10 @@ fun SettingsPage(
                                     cur.remove(m.id)
                                 } else {
                                     // 已达上限：先移除最早选的那个，再加入新的
-                                    if (cur.size >= 5) cur.removeAt(0)
+                                    // 用统一常量，避免上限在多处各写一遍
+                                    if (cur.size >= SettingsStore.NOTIFY_MOOD_MAX) {
+                                        cur.removeAt(0)
+                                    }
                                     cur.add(m.id)
                                 }
                                 store.setNotifyMoodIds(cur)
