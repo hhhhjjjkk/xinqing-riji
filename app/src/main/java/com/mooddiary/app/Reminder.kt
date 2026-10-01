@@ -227,7 +227,16 @@ object Reminder {
         schedule(context)
     }
 
-    fun sendNotification(context: Context, hour: Int) {
+    /**
+     * 发送整点提醒。
+     * 整体由外层 onTick 的 runCatching 保护；此处再加一层，
+     * 确保任何偏好读取/资源异常都不会中断后续 schedule 链式排程。
+     */
+    fun sendNotification(context: Context, hour: Int) = runCatching {
+        sendNotificationInternal(context, hour)
+    }
+
+    private fun sendNotificationInternal(context: Context, hour: Int) {
         ensureChannel(context)
 
         // 点通知整体仍可跳转 app（打开记录弹窗），但不是必须的
