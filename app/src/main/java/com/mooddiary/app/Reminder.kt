@@ -37,6 +37,19 @@ object Reminder {
     private const val WINDOW_MS = 15 * 60 * 1000L
     /** 通知里的心情按钮槽位数（与布局中的槽位数量一致） */
     private const val SLOT_COUNT = 5
+    /** 通知快速记录 PendingIntent 的 requestCode 基址（与 REQ_ALARM 等拉开距离） */
+    private const val RC_QUICK_MOOD_BASE = 10000
+
+    /** 通知槽位的编译期 id 表（顺序与布局 slot_0..4 一致） */
+    private val SLOT_BTN_IDS = intArrayOf(
+        R.id.btn_slot_0, R.id.btn_slot_1, R.id.btn_slot_2, R.id.btn_slot_3, R.id.btn_slot_4
+    )
+    private val SLOT_EMOJI_IDS = intArrayOf(
+        R.id.emoji_slot_0, R.id.emoji_slot_1, R.id.emoji_slot_2, R.id.emoji_slot_3, R.id.emoji_slot_4
+    )
+    private val SLOT_LABEL_IDS = intArrayOf(
+        R.id.label_slot_0, R.id.label_slot_1, R.id.label_slot_2, R.id.label_slot_3, R.id.label_slot_4
+    )
 
     /** 整点触发广播 */
     const val ACTION_TICK = "com.mooddiary.app.ACTION_REMINDER_TICK"
@@ -59,7 +72,15 @@ object Reminder {
      * 注意必须过滤掉当前目录中已不存在的心情，避免出现空白按钮。
      */
     private fun notificationMoods(context: Context): List<Mood> {
-        val source = moods.ifEmpty { defaultMoods }
+        // 关键：不能只依赖全局状态 moods。
+        // moods 仅在 MainActivity.onCreate 里由 MoodCatalog.load 初始化，
+        // 而本项目没有自定义 Application 类；开机 BOOT_COMPLETED、
+        // 或进程被杀后的整点广播会新建进程且不经过 MainActivity，
+        // 此时 moods 还是内置默认(1..5)，用户在设置里勾选的自定义心情
+        // 会全部查不到，导致通知退回默认心情——本次修复也就失效了。
+        // 因此这里自行从存储载入一次自定义目录。
+        val custom = MoodCatalog.load(context)
+        val source = (custom ?: moods).ifEmpty { defaultMoods }
         val byId = source.associateBy { it.id }
 
         val picked = SettingsStore(context).current().notifyMoodIds
@@ -246,12 +267,14 @@ object Reminder {
         // 布局只提供槽位，表情、文字、点击目标全部在此绑定，
         // 因此自定义心情后通知显示的内容与实际记录的心情一致。
         val moodsInNotif = notificationMoods(context)
-        val res = context.resources
-        val pkg = context.packageName
         for (i in 0 until SLOT_COUNT) {
-            val btnId = res.getIdentifier("btn_slot_$i", "id", pkg)
-            val emojiId = res.getIdentifier("emoji_slot_$i", "id", pkg)
-            val labelId = res.getIdentifier("label_slot_$i", "id", pkg)
+            // 用编译期常量数组，而不是 getIdentifier 运行时按名字查找：
+            // 后者一旦拼错会返回 0，且异常要延迟到 SystemUI 进程 inflate 时才抛，
+            // 表现为整条通知静默不显示、本应用完全捕获不到。
+            // 改用 R.id 引用后，改名/缺失会在编译期直接报错。
+            val btnId = SLOT_BTN_IDS[i]
+            val emojiId = SLOT_EMOJI_IDS[i]
+            val labelId = SLOT_LABEL_IDS[i]
             val mood = moodsInNotif.getOrNull(i)
             if (mood == null) {
                 // 心情不足 5 个：隐藏多余槽位
@@ -262,9 +285,14 @@ object Reminder {
             views.setTextViewText(emojiId, mood.emoji)
             views.setTextViewText(labelId, mood.label)
             val moodId = mood.id
+            // 用「槽位下标」而非 moodId 编码 requestCode：
+            // 原写法 moodId*100+hour，当 moodId=0 时会退化为 hour，
+            // 与通知整体的 openPending 相同；而 moodId=90&hour=1 时等于 9001，
+            // 与闹钟 REQ_ALARM 完全相同且同为广播，仅因 action 不同而勉强不冲突。
+            // 改用独立基址 + 槽位下标，彻底避开这些碰撞。
             val pending = PendingIntent.getBroadcast(
                 context,
-                moodId * 100 + hour,
+                RC_QUICK_MOOD_BASE + i * 100 + hour,
                 Intent(context, ReminderReceiver::class.java).apply {
                     action = ACTION_QUICK_MOOD
                     putExtra(EXTRA_MOOD_ID, moodId)
