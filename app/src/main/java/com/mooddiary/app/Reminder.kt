@@ -35,6 +35,8 @@ object Reminder {
     private const val REQ_ALARM = 9001
     /** 无精确闹钟权限时的触发窗口（15 分钟） */
     private const val WINDOW_MS = 15 * 60 * 1000L
+    /** 通知里的心情按钮槽位数（与布局中的槽位数量一致） */
+    private const val SLOT_COUNT = 5
 
     /** 整点触发广播 */
     const val ACTION_TICK = "com.mooddiary.app.ACTION_REMINDER_TICK"
@@ -47,13 +49,11 @@ object Reminder {
      * 通知里的表情按钮。按分值倒序，最多 5 个（RemoteViews 布局只有 5 个槽位）。
      * 跟随用户自定义的心情目录，而不是写死的 5 个内置心情。
      */
-    private fun notificationMoods(): List<Pair<Int, String>> {
+    private fun notificationMoods(): List<Mood> {
         // 正常情况下 moods 已由 MainActivity 载入自定义目录；
         // 万一为空则退回内置默认，保证通知至少有表情按钮可用
         val source = moods.ifEmpty { defaultMoods }
-        return source.sortedByDescending { it.score }
-            .take(5)
-            .map { it.id to it.emoji }
+        return source.sortedByDescending { it.score }.take(SLOT_COUNT)
     }
 
     /**
@@ -221,11 +221,32 @@ object Reminder {
         }
         val views = RemoteViews(context.packageName, R.layout.notification_mood_chooser)
         views.setTextColor(R.id.notification_title, accentArgb)
+        views.setTextViewText(R.id.notification_title, "此刻心情怎么样？")
         views.setTextViewText(
-            R.id.notification_title,
-            "现在心情怎么样？点一个表情，记录 ${String.format(Locale.CHINA, "%02d:00", hour)} 的心情"
+            R.id.notification_subtitle,
+            "点一个表情，记录 ${String.format(Locale.CHINA, "%02d:00", hour)} 的心情"
         )
-        notificationMoods().forEach { (moodId, _) ->
+
+        // 按当前心情目录填充槽位（不再是写死的 5 个内置心情）：
+        // 布局只提供槽位，表情、文字、点击目标全部在此绑定，
+        // 因此自定义心情后通知显示的内容与实际记录的心情一致。
+        val moodsInNotif = notificationMoods()
+        val res = context.resources
+        val pkg = context.packageName
+        for (i in 0 until SLOT_COUNT) {
+            val btnId = res.getIdentifier("btn_slot_$i", "id", pkg)
+            val emojiId = res.getIdentifier("emoji_slot_$i", "id", pkg)
+            val labelId = res.getIdentifier("label_slot_$i", "id", pkg)
+            val mood = moodsInNotif.getOrNull(i)
+            if (mood == null) {
+                // 心情不足 5 个：隐藏多余槽位
+                views.setViewVisibility(btnId, android.view.View.GONE)
+                continue
+            }
+            views.setViewVisibility(btnId, android.view.View.VISIBLE)
+            views.setTextViewText(emojiId, mood.emoji)
+            views.setTextViewText(labelId, mood.label)
+            val moodId = mood.id
             val pending = PendingIntent.getBroadcast(
                 context,
                 moodId * 100 + hour,
@@ -236,10 +257,7 @@ object Reminder {
                 },
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
-            views.setOnClickPendingIntent(
-                context.resources.getIdentifier("btn_mood_$moodId", "id", context.packageName),
-                pending
-            )
+            views.setOnClickPendingIntent(btnId, pending)
         }
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)

@@ -1,153 +1,182 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  通知里的快速心情选择器。
-  5 个表情横向排列，点任意一个直接记录当前小时的心情，不跳转 app。
-  用 RemoteViews（传统 XML 布局），不能用 Compose。
+  通知里的快速心情选择器（RemoteViews，不能用 Compose）。
+
+  这里只提供 5 个「槽位」，实际显示的表情、文字与点击目标全部由
+  Reminder.sendNotification 在运行时按当前心情目录填充：
+  - 心情目录可自定义，不能把表情/文字写死在布局里
+  - 心情不足 5 个时，多余槽位会被设为 GONE
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:paddingTop="4dp"
-    android:paddingBottom="4dp">
+    android:paddingStart="12dp"
+    android:paddingEnd="12dp"
+    android:paddingTop="10dp"
+    android:paddingBottom="10dp">
 
+    <!-- 标题 -->
     <TextView
         android:id="@+id/notification_title"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="6dp"
         android:textColor="#FFFFFF"
-        android:textSize="13sp" />
+        android:textSize="14sp"
+        android:textStyle="bold" />
 
+    <!-- 副标题：说明记录的是哪个小时 -->
+    <TextView
+        android:id="@+id/notification_subtitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:layout_marginBottom="10dp"
+        android:textColor="#A8FFFFFF"
+        android:textSize="11sp" />
+
+    <!-- 5 个心情槽位，平均分布 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:weightSum="5">
+        android:orientation="horizontal">
 
         <LinearLayout
-            android:id="@+id/btn_mood_5"
+            android:id="@+id/btn_slot_0"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:layout_marginEnd="3dp"
             android:gravity="center"
             android:orientation="vertical"
-            android:padding="6dp"
-            android:background="?android:attr/selectableItemBackgroundBorderless">
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:background="@drawable/notification_mood_bg">
 
             <TextView
-                android:id="@+id/emoji_5"
+                android:id="@+id/emoji_slot_0"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textSize="26sp"
-                android:text="😄" />
+                android:textSize="24sp" />
 
             <TextView
+                android:id="@+id/label_slot_0"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textColor="#B0FFFFFF"
-                android:textSize="9sp"
-                android:text="开心" />
+                android:layout_marginTop="2dp"
+                android:textColor="#CCFFFFFF"
+                android:textSize="10sp" />
         </LinearLayout>
 
         <LinearLayout
-            android:id="@+id/btn_mood_4"
+            android:id="@+id/btn_slot_1"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:layout_marginStart="3dp"
+            android:layout_marginEnd="3dp"
             android:gravity="center"
             android:orientation="vertical"
-            android:padding="6dp"
-            android:background="?android:attr/selectableItemBackgroundBorderless">
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:background="@drawable/notification_mood_bg">
 
             <TextView
-                android:id="@+id/emoji_4"
+                android:id="@+id/emoji_slot_1"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textSize="26sp"
-                android:text="😌" />
+                android:textSize="24sp" />
 
             <TextView
+                android:id="@+id/label_slot_1"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textColor="#B0FFFFFF"
-                android:textSize="9sp"
-                android:text="平静" />
+                android:layout_marginTop="2dp"
+                android:textColor="#CCFFFFFF"
+                android:textSize="10sp" />
         </LinearLayout>
 
         <LinearLayout
-            android:id="@+id/btn_mood_3"
+            android:id="@+id/btn_slot_2"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:layout_marginStart="3dp"
+            android:layout_marginEnd="3dp"
             android:gravity="center"
             android:orientation="vertical"
-            android:padding="6dp"
-            android:background="?android:attr/selectableItemBackgroundBorderless">
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:background="@drawable/notification_mood_bg">
 
             <TextView
-                android:id="@+id/emoji_3"
+                android:id="@+id/emoji_slot_2"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textSize="26sp"
-                android:text="😐" />
+                android:textSize="24sp" />
 
             <TextView
+                android:id="@+id/label_slot_2"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textColor="#B0FFFFFF"
-                android:textSize="9sp"
-                android:text="一般" />
+                android:layout_marginTop="2dp"
+                android:textColor="#CCFFFFFF"
+                android:textSize="10sp" />
         </LinearLayout>
 
         <LinearLayout
-            android:id="@+id/btn_mood_2"
+            android:id="@+id/btn_slot_3"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:layout_marginStart="3dp"
+            android:layout_marginEnd="3dp"
             android:gravity="center"
             android:orientation="vertical"
-            android:padding="6dp"
-            android:background="?android:attr/selectableItemBackgroundBorderless">
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:background="@drawable/notification_mood_bg">
 
             <TextView
-                android:id="@+id/emoji_2"
+                android:id="@+id/emoji_slot_3"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textSize="26sp"
-                android:text="😔" />
+                android:textSize="24sp" />
 
             <TextView
+                android:id="@+id/label_slot_3"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textColor="#B0FFFFFF"
-                android:textSize="9sp"
-                android:text="低落" />
+                android:layout_marginTop="2dp"
+                android:textColor="#CCFFFFFF"
+                android:textSize="10sp" />
         </LinearLayout>
 
         <LinearLayout
-            android:id="@+id/btn_mood_1"
+            android:id="@+id/btn_slot_4"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:layout_marginStart="3dp"
             android:gravity="center"
             android:orientation="vertical"
-            android:padding="6dp"
-            android:background="?android:attr/selectableItemBackgroundBorderless">
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:background="@drawable/notification_mood_bg">
 
             <TextView
-                android:id="@+id/emoji_1"
+                android:id="@+id/emoji_slot_4"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textSize="26sp"
-                android:text="😡" />
+                android:textSize="24sp" />
 
             <TextView
+                android:id="@+id/label_slot_4"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textColor="#B0FFFFFF"
-                android:textSize="9sp"
-                android:text="生气" />
+                android:layout_marginTop="2dp"
+                android:textColor="#CCFFFFFF"
+                android:textSize="10sp" />
         </LinearLayout>
     </LinearLayout>
 </LinearLayout>
