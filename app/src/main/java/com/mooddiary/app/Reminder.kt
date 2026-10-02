@@ -49,16 +49,28 @@ object Reminder {
     fun notificationId(hour: Int): Int =
         LocalDate.now().dayOfYear * 100 + hour
 
-    /** 通知槽位的编译期 id 表（顺序与布局 slot_0..4 一致） */
+    /** 展开态槽位的编译期 id 表（顺序与布局 slot_0..9 一致，两行各 5 个） */
     private val SLOT_BTN_IDS = intArrayOf(
-        R.id.btn_slot_0, R.id.btn_slot_1, R.id.btn_slot_2, R.id.btn_slot_3, R.id.btn_slot_4
+        R.id.btn_slot_0, R.id.btn_slot_1, R.id.btn_slot_2, R.id.btn_slot_3, R.id.btn_slot_4,
+        R.id.btn_slot_5, R.id.btn_slot_6, R.id.btn_slot_7, R.id.btn_slot_8, R.id.btn_slot_9
     )
     private val SLOT_EMOJI_IDS = intArrayOf(
-        R.id.emoji_slot_0, R.id.emoji_slot_1, R.id.emoji_slot_2, R.id.emoji_slot_3, R.id.emoji_slot_4
+        R.id.emoji_slot_0, R.id.emoji_slot_1, R.id.emoji_slot_2, R.id.emoji_slot_3, R.id.emoji_slot_4,
+        R.id.emoji_slot_5, R.id.emoji_slot_6, R.id.emoji_slot_7, R.id.emoji_slot_8, R.id.emoji_slot_9
     )
     private val SLOT_LABEL_IDS = intArrayOf(
-        R.id.label_slot_0, R.id.label_slot_1, R.id.label_slot_2, R.id.label_slot_3, R.id.label_slot_4
+        R.id.label_slot_0, R.id.label_slot_1, R.id.label_slot_2, R.id.label_slot_3, R.id.label_slot_4,
+        R.id.label_slot_5, R.id.label_slot_6, R.id.label_slot_7, R.id.label_slot_8, R.id.label_slot_9
     )
+    /** 折叠态槽位（只有 5 个，且只显示表情） */
+    private val COMPACT_BTN_IDS = intArrayOf(
+        R.id.c_btn_0, R.id.c_btn_1, R.id.c_btn_2, R.id.c_btn_3, R.id.c_btn_4
+    )
+    private val COMPACT_EMOJI_IDS = intArrayOf(
+        R.id.c_emoji_0, R.id.c_emoji_1, R.id.c_emoji_2, R.id.c_emoji_3, R.id.c_emoji_4
+    )
+    /** 折叠态一行最多显示的表情数 */
+    private val COMPACT_SLOT_COUNT = COMPACT_BTN_IDS.size
 
     /** 整点触发广播 */
     const val ACTION_TICK = "com.mooddiary.app.ACTION_REMINDER_TICK"
@@ -274,6 +286,7 @@ object Reminder {
             AccentColor.SLATE -> 0xFF4A5C6A.toInt()
         }
         val views = RemoteViews(context.packageName, R.layout.notification_mood_chooser)
+        val compact = RemoteViews(context.packageName, R.layout.notification_mood_compact)
         views.setTextColor(R.id.notification_title, accentArgb)
         views.setTextViewText(R.id.notification_title, "此刻心情怎么样？")
         views.setTextViewText(
@@ -282,32 +295,51 @@ object Reminder {
         )
 
         // 按当前心情目录填充槽位（不再是写死的 5 个内置心情）：
-        // 布局只提供槽位，表情、文字、点击目标全部在此绑定，
-        // 因此自定义心情后通知显示的内容与实际记录的心情一致。
+        // 表情、文字、点击目标全部在此绑定，因此自定义心情后
+        // 通知显示的内容与实际记录的心情一致。
+        //
+        // 同时生成两个 RemoteViews：
+        // - 折叠态（compact）：高度受限，只放一行表情
+        // - 展开态（views）：标题 + 副标题 + 两行共 10 个表情
+        // 若只设置内容视图而不设置大视图，折叠态会直接套用高布局并被系统裁掉，
+        // 表现为「有的心情图标看不见」——这正是本次要修的问题。
         val moodsInNotif = notificationMoods(context)
+
+        // 记录每个槽位对应的 moodId，供两种布局共用的点击绑定
+        val slotMoodIds = arrayOfNulls<Int>(SLOT_COUNT)
+
+        // —— 展开态：最多 10 个槽位 ——
         for (i in 0 until SLOT_COUNT) {
-            // 用编译期常量数组，而不是 getIdentifier 运行时按名字查找：
-            // 后者一旦拼错会返回 0，且异常要延迟到 SystemUI 进程 inflate 时才抛，
-            // 表现为整条通知静默不显示、本应用完全捕获不到。
-            // 改用 R.id 引用后，改名/缺失会在编译期直接报错。
-            val btnId = SLOT_BTN_IDS[i]
-            val emojiId = SLOT_EMOJI_IDS[i]
-            val labelId = SLOT_LABEL_IDS[i]
             val mood = moodsInNotif.getOrNull(i)
             if (mood == null) {
-                // 心情不足 5 个：隐藏多余槽位
-                views.setViewVisibility(btnId, android.view.View.GONE)
-                continue
+                // 心情不足：隐藏多余槽位（含其背景）
+                views.setViewVisibility(SLOT_BTN_IDS[i], android.view.View.GONE)
+            } else {
+                views.setViewVisibility(SLOT_BTN_IDS[i], android.view.View.VISIBLE)
+                views.setTextViewText(SLOT_EMOJI_IDS[i], mood.emoji)
+                views.setTextViewText(SLOT_LABEL_IDS[i], mood.label)
+                slotMoodIds[i] = mood.id
             }
-            views.setViewVisibility(btnId, android.view.View.VISIBLE)
-            views.setTextViewText(emojiId, mood.emoji)
-            views.setTextViewText(labelId, mood.label)
-            val moodId = mood.id
-            // 用「槽位下标」而非 moodId 编码 requestCode：
-            // 原写法 moodId*100+hour，当 moodId=0 时会退化为 hour，
-            // 与通知整体的 openPending 相同；而 moodId=90&hour=1 时等于 9001，
-            // 与闹钟 REQ_ALARM 完全相同且同为广播，仅因 action 不同而勉强不冲突。
-            // 改用独立基址 + 槽位下标，彻底避开这些碰撞。
+        }
+
+        // —— 折叠态：只有一行，取前几个（只显示表情） ——
+        for (i in 0 until COMPACT_SLOT_COUNT) {
+            val mood = moodsInNotif.getOrNull(i)
+            if (mood == null) {
+                compact.setViewVisibility(COMPACT_BTN_IDS[i], android.view.View.GONE)
+            } else {
+                compact.setViewVisibility(COMPACT_BTN_IDS[i], android.view.View.VISIBLE)
+                compact.setTextViewText(COMPACT_EMOJI_IDS[i], mood.emoji)
+            }
+        }
+
+        // —— 点击绑定：两种布局共用同一份 PendingIntent ——
+        // 用「槽位下标」而非 moodId 编码 requestCode：
+        // 原写法 moodId*100+hour 中，moodId=0 会退化为 hour（与通知整体的
+        // 跳转 PendingIntent 相同），moodId=90&hour=1 则等于 9001
+        // （与闹钟 REQ_ALARM 完全相同且同为广播，仅靠 action 不同勉强区分）。
+        for (i in 0 until SLOT_COUNT) {
+            val moodId = slotMoodIds[i] ?: continue
             val pending = PendingIntent.getBroadcast(
                 context,
                 RC_QUICK_MOOD_BASE + i * 100 + hour,
@@ -318,12 +350,18 @@ object Reminder {
                 },
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
-            views.setOnClickPendingIntent(btnId, pending)
+            views.setOnClickPendingIntent(SLOT_BTN_IDS[i], pending)
+            if (i < COMPACT_SLOT_COUNT) {
+                compact.setOnClickPendingIntent(COMPACT_BTN_IDS[i], pending)
+            }
         }
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_mood)
-            .setCustomContentView(views)
+            // 折叠态用紧凑布局、展开态用完整布局。
+            // 两者都必须设置，否则折叠态会套用高布局被裁切。
+            .setCustomContentView(compact)
+            .setCustomBigContentView(views)
             .setStyle(NotificationCompat.DecoratedCustomViewStyle())
             .setAutoCancel(true)
             .setContentIntent(openPending)

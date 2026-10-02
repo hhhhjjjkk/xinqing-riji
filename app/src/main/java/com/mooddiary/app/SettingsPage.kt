@@ -350,7 +350,8 @@ fun SettingsPage(
                 HorizontalDivider(Modifier.padding(vertical = 10.dp))
                 SettingLabel("通知里显示的心情")
                 Text(
-                    "最多 5 个（通知宽度有限）。不选则自动使用分值最高的几个。",
+                    "最多 ${SettingsStore.NOTIFY_MOOD_MAX} 个（展开通知可显示两行）。" +
+                        "不选则自动使用分值最高的几个。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

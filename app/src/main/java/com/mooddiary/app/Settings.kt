@@ -199,8 +199,11 @@ class SettingsStore(context: Context) {
         private const val KEY_WEEK_START = "week_start"
         private const val KEY_NOTIFY_MOODS = "notify_mood_ids"
 
-        /** 通知里最多显示的心情数（受通知布局槽位限制） */
-        const val NOTIFY_MOOD_MAX = 5
+        /**
+         * 通知里最多显示的心情数。
+         * 展开态布局提供两行共 10 个槽位；折叠态只显示前 5 个。
+         */
+        const val NOTIFY_MOOD_MAX = 10
         private const val KEY_ACCENT = "accent_color"
         private const val KEY_DYNAMIC = "dynamic_color"
         private const val KEY_START_TAB = "start_tab"

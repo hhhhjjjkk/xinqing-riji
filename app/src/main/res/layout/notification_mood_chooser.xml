@@ -1,11 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  通知里的快速心情选择器（RemoteViews，不能用 Compose）。
+  通知「展开态」布局（RemoteViews，不能用 Compose）。
 
-  这里只提供 5 个「槽位」，实际显示的表情、文字与点击目标全部由
-  Reminder.sendNotification 在运行时按当前心情目录填充：
-  - 心情目录可自定义，不能把表情/文字写死在布局里
-  - 心情不足 5 个时，多余槽位会被设为 GONE
+  分两行共 10 个槽位：原先只有 5 个，心情较多时超出部分不会显示。
+  折叠态另有 notification_mood_compact.xml（高度受限，只放一行）。
+
+  所有槽位的表情、文字与点击目标均由 Reminder.sendNotification
+  在运行时按当前心情目录填充；心情不足时多余槽位会被隐藏。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
@@ -13,10 +14,9 @@
     android:orientation="vertical"
     android:paddingStart="12dp"
     android:paddingEnd="12dp"
-    android:paddingTop="10dp"
-    android:paddingBottom="10dp">
+    android:paddingTop="8dp"
+    android:paddingBottom="8dp">
 
-    <!-- 标题 -->
     <TextView
         android:id="@+id/notification_title"
         android:layout_width="wrap_content"
@@ -25,39 +25,35 @@
         android:textSize="14sp"
         android:textStyle="bold" />
 
-    <!-- 副标题：说明记录的是哪个小时 -->
     <TextView
         android:id="@+id/notification_subtitle"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="2dp"
-        android:layout_marginBottom="10dp"
+        android:layout_marginBottom="8dp"
         android:textColor="#A8FFFFFF"
         android:textSize="11sp" />
 
-    <!-- 5 个心情槽位，平均分布 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal">
-
         <LinearLayout
             android:id="@+id/btn_slot_0"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:layout_marginEnd="3dp"
             android:gravity="center"
             android:orientation="vertical"
-            android:paddingTop="8dp"
-            android:paddingBottom="8dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
             android:background="@drawable/notification_mood_bg">
 
             <TextView
                 android:id="@+id/emoji_slot_0"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textSize="24sp" />
+                android:textSize="22sp" />
 
             <TextView
                 android:id="@+id/label_slot_0"
@@ -67,25 +63,23 @@
                 android:textColor="#CCFFFFFF"
                 android:textSize="10sp" />
         </LinearLayout>
-
         <LinearLayout
             android:id="@+id/btn_slot_1"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:layout_marginStart="3dp"
-            android:layout_marginEnd="3dp"
             android:gravity="center"
             android:orientation="vertical"
-            android:paddingTop="8dp"
-            android:paddingBottom="8dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
             android:background="@drawable/notification_mood_bg">
 
             <TextView
                 android:id="@+id/emoji_slot_1"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textSize="24sp" />
+                android:textSize="22sp" />
 
             <TextView
                 android:id="@+id/label_slot_1"
@@ -95,25 +89,23 @@
                 android:textColor="#CCFFFFFF"
                 android:textSize="10sp" />
         </LinearLayout>
-
         <LinearLayout
             android:id="@+id/btn_slot_2"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:layout_marginStart="3dp"
-            android:layout_marginEnd="3dp"
             android:gravity="center"
             android:orientation="vertical"
-            android:paddingTop="8dp"
-            android:paddingBottom="8dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
             android:background="@drawable/notification_mood_bg">
 
             <TextView
                 android:id="@+id/emoji_slot_2"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textSize="24sp" />
+                android:textSize="22sp" />
 
             <TextView
                 android:id="@+id/label_slot_2"
@@ -123,25 +115,23 @@
                 android:textColor="#CCFFFFFF"
                 android:textSize="10sp" />
         </LinearLayout>
-
         <LinearLayout
             android:id="@+id/btn_slot_3"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:layout_marginStart="3dp"
-            android:layout_marginEnd="3dp"
             android:gravity="center"
             android:orientation="vertical"
-            android:paddingTop="8dp"
-            android:paddingBottom="8dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
             android:background="@drawable/notification_mood_bg">
 
             <TextView
                 android:id="@+id/emoji_slot_3"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textSize="24sp" />
+                android:textSize="22sp" />
 
             <TextView
                 android:id="@+id/label_slot_3"
@@ -151,7 +141,6 @@
                 android:textColor="#CCFFFFFF"
                 android:textSize="10sp" />
         </LinearLayout>
-
         <LinearLayout
             android:id="@+id/btn_slot_4"
             android:layout_width="0dp"
@@ -160,18 +149,155 @@
             android:layout_marginStart="3dp"
             android:gravity="center"
             android:orientation="vertical"
-            android:paddingTop="8dp"
-            android:paddingBottom="8dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
             android:background="@drawable/notification_mood_bg">
 
             <TextView
                 android:id="@+id/emoji_slot_4"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textSize="24sp" />
+                android:textSize="22sp" />
 
             <TextView
                 android:id="@+id/label_slot_4"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:textColor="#CCFFFFFF"
+                android:textSize="10sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/slot_row_2"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:orientation="horizontal">
+        <LinearLayout
+            android:id="@+id/btn_slot_5"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
+            android:background="@drawable/notification_mood_bg">
+
+            <TextView
+                android:id="@+id/emoji_slot_5"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="22sp" />
+
+            <TextView
+                android:id="@+id/label_slot_5"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:textColor="#CCFFFFFF"
+                android:textSize="10sp" />
+        </LinearLayout>
+        <LinearLayout
+            android:id="@+id/btn_slot_6"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="3dp"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
+            android:background="@drawable/notification_mood_bg">
+
+            <TextView
+                android:id="@+id/emoji_slot_6"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="22sp" />
+
+            <TextView
+                android:id="@+id/label_slot_6"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:textColor="#CCFFFFFF"
+                android:textSize="10sp" />
+        </LinearLayout>
+        <LinearLayout
+            android:id="@+id/btn_slot_7"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="3dp"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
+            android:background="@drawable/notification_mood_bg">
+
+            <TextView
+                android:id="@+id/emoji_slot_7"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="22sp" />
+
+            <TextView
+                android:id="@+id/label_slot_7"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:textColor="#CCFFFFFF"
+                android:textSize="10sp" />
+        </LinearLayout>
+        <LinearLayout
+            android:id="@+id/btn_slot_8"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="3dp"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
+            android:background="@drawable/notification_mood_bg">
+
+            <TextView
+                android:id="@+id/emoji_slot_8"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="22sp" />
+
+            <TextView
+                android:id="@+id/label_slot_8"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:textColor="#CCFFFFFF"
+                android:textSize="10sp" />
+        </LinearLayout>
+        <LinearLayout
+            android:id="@+id/btn_slot_9"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="3dp"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
+            android:background="@drawable/notification_mood_bg">
+
+            <TextView
+                android:id="@+id/emoji_slot_9"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="22sp" />
+
+            <TextView
+                android:id="@+id/label_slot_9"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
