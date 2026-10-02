@@ -2,6 +2,6 @@
 <!-- 通知里心情按钮的圆角底：半透明白，适配深浅两种通知背景 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
-    <solid android:color="#24FFFFFF" />
+    <solid android:color="@color/notif_btn_bg" />
     <corners android:radius="18dp" />
 </shape>

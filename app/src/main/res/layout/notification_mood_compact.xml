@@ -30,7 +30,8 @@
             android:id="@+id/c_emoji_0"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="22sp" />
+            android:textSize="22sp"
+            android:singleLine="true" />
     </LinearLayout>
 
     <LinearLayout
@@ -49,7 +50,8 @@
             android:id="@+id/c_emoji_1"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="22sp" />
+            android:textSize="22sp"
+            android:singleLine="true" />
     </LinearLayout>
 
     <LinearLayout
@@ -68,7 +70,8 @@
             android:id="@+id/c_emoji_2"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="22sp" />
+            android:textSize="22sp"
+            android:singleLine="true" />
     </LinearLayout>
 
     <LinearLayout
@@ -87,7 +90,8 @@
             android:id="@+id/c_emoji_3"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="22sp" />
+            android:textSize="22sp"
+            android:singleLine="true" />
     </LinearLayout>
 
     <LinearLayout
@@ -106,6 +110,7 @@
             android:id="@+id/c_emoji_4"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="22sp" />
+            android:textSize="22sp"
+            android:singleLine="true" />
     </LinearLayout>
 </LinearLayout>

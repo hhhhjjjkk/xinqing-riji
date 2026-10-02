@@ -201,9 +201,17 @@ class SettingsStore(context: Context) {
 
         /**
          * 通知里最多显示的心情数。
-         * 展开态布局提供两行共 10 个槽位；折叠态只显示前 5 个。
+         *
+         * 必须与「折叠态能显示的个数」一致：
+         * 折叠通知的内容区只有约 64dp，单行已占约 46dp，
+         * 两行（约 97dp）放不下。因此折叠态物理上只能显示一行 5 个。
+         *
+         * 若把上限设得比折叠态更多，多出来的心情在锁屏/通知栏
+         * （那才是用户最常看到的形态）会完全不出现，
+         * 表现为「有的心情图标不显示」。
+         * 因此这里与折叠态槽位数对齐，保证所见即所得。
          */
-        const val NOTIFY_MOOD_MAX = 10
+        const val NOTIFY_MOOD_MAX = 5
         private const val KEY_ACCENT = "accent_color"
         private const val KEY_DYNAMIC = "dynamic_color"
         private const val KEY_START_TAB = "start_tab"

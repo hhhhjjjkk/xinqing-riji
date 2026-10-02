@@ -21,7 +21,7 @@
         android:id="@+id/notification_title"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:textColor="#FFFFFF"
+        android:textColor="@color/notif_title"
         android:textSize="14sp"
         android:textStyle="bold" />
 
@@ -31,7 +31,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="2dp"
         android:layout_marginBottom="8dp"
-        android:textColor="#A8FFFFFF"
+        android:textColor="@color/notif_subtitle"
         android:textSize="11sp" />
 
     <LinearLayout
@@ -60,8 +60,10 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:textColor="#CCFFFFFF"
-                android:textSize="10sp" />
+                android:textColor="@color/notif_label"
+                android:textSize="10sp"
+                android:singleLine="true"
+                android:ellipsize="end" />
         </LinearLayout>
         <LinearLayout
             android:id="@+id/btn_slot_1"
@@ -86,8 +88,10 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:textColor="#CCFFFFFF"
-                android:textSize="10sp" />
+                android:textColor="@color/notif_label"
+                android:textSize="10sp"
+                android:singleLine="true"
+                android:ellipsize="end" />
         </LinearLayout>
         <LinearLayout
             android:id="@+id/btn_slot_2"
@@ -112,8 +116,10 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:textColor="#CCFFFFFF"
-                android:textSize="10sp" />
+                android:textColor="@color/notif_label"
+                android:textSize="10sp"
+                android:singleLine="true"
+                android:ellipsize="end" />
         </LinearLayout>
         <LinearLayout
             android:id="@+id/btn_slot_3"
@@ -138,8 +144,10 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:textColor="#CCFFFFFF"
-                android:textSize="10sp" />
+                android:textColor="@color/notif_label"
+                android:textSize="10sp"
+                android:singleLine="true"
+                android:ellipsize="end" />
         </LinearLayout>
         <LinearLayout
             android:id="@+id/btn_slot_4"
@@ -164,8 +172,10 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:textColor="#CCFFFFFF"
-                android:textSize="10sp" />
+                android:textColor="@color/notif_label"
+                android:textSize="10sp"
+                android:singleLine="true"
+                android:ellipsize="end" />
         </LinearLayout>
     </LinearLayout>
 
@@ -197,8 +207,10 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:textColor="#CCFFFFFF"
-                android:textSize="10sp" />
+                android:textColor="@color/notif_label"
+                android:textSize="10sp"
+                android:singleLine="true"
+                android:ellipsize="end" />
         </LinearLayout>
         <LinearLayout
             android:id="@+id/btn_slot_6"
@@ -223,8 +235,10 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:textColor="#CCFFFFFF"
-                android:textSize="10sp" />
+                android:textColor="@color/notif_label"
+                android:textSize="10sp"
+                android:singleLine="true"
+                android:ellipsize="end" />
         </LinearLayout>
         <LinearLayout
             android:id="@+id/btn_slot_7"
@@ -249,8 +263,10 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:textColor="#CCFFFFFF"
-                android:textSize="10sp" />
+                android:textColor="@color/notif_label"
+                android:textSize="10sp"
+                android:singleLine="true"
+                android:ellipsize="end" />
         </LinearLayout>
         <LinearLayout
             android:id="@+id/btn_slot_8"
@@ -275,8 +291,10 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:textColor="#CCFFFFFF"
-                android:textSize="10sp" />
+                android:textColor="@color/notif_label"
+                android:textSize="10sp"
+                android:singleLine="true"
+                android:ellipsize="end" />
         </LinearLayout>
         <LinearLayout
             android:id="@+id/btn_slot_9"
@@ -301,8 +319,10 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:textColor="#CCFFFFFF"
-                android:textSize="10sp" />
+                android:textColor="@color/notif_label"
+                android:textSize="10sp"
+                android:singleLine="true"
+                android:ellipsize="end" />
         </LinearLayout>
     </LinearLayout>
 </LinearLayout>

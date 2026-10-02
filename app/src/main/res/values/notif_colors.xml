@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 通知文字颜色（浅色通知面板）：用深色文字，否则白字在浅底上看不见 -->
+<resources>
+    <color name="notif_title">#FF1B1B1F</color>
+    <color name="notif_subtitle">#B31B1B1F</color>
+    <color name="notif_label">#CC1B1B1F</color>
+    <color name="notif_btn_bg">#14000000</color>
+</resources>

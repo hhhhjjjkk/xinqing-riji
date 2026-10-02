@@ -880,8 +880,11 @@ private fun MoodEditForm(
     onChange: (Mood) -> Unit
 ) {
     val presets = listOf(
-        "😄", "😌", "😐", "😔", "😡", "🥰", "😴", "🤔",
-        "😢", "🤩", "😰", "🥳", "😤", "🫠", "😶", "🙃"
+        // 仅使用 Emoji 4.0（Android 7.0）及更早就有的码点。
+        // 本项目 minSdk = 24，更新的 emoji 在老设备上没有字形，
+        // 会被渲染成空白或豆腐块（例如 🫠 属 Emoji 14.0，需 Android 12L+）。
+        "😄", "😌", "😐", "😔", "😡", "😴", "🤔", "😢",
+        "😰", "😤", "😶", "🙃", "😊", "😍", "😭", "😅"
     )
     val colors = listOf(
         0xFFFFB300, 0xFF43A047, 0xFF78909C, 0xFF42A5F5, 0xFFEF5350,

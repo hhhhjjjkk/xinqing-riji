@@ -322,6 +322,13 @@ object Reminder {
             }
         }
 
+        // 第二行容器：当天数不超过 5 个时整体隐藏，
+        // 否则容器本身仍占高度（6dp 间距 + 空行），展开通知会多出一条空白
+        views.setViewVisibility(
+            R.id.slot_row_2,
+            if (moodsInNotif.size > 5) android.view.View.VISIBLE else android.view.View.GONE
+        )
+
         // —— 折叠态：只有一行，取前几个（只显示表情） ——
         for (i in 0 until COMPACT_SLOT_COUNT) {
             val mood = moodsInNotif.getOrNull(i)
