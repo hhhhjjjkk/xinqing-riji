@@ -378,7 +378,10 @@ fun SettingsPage(
                                 }
                                 store.setNotifyMoodIds(cur)
                             },
-                            label = { Text("${m.emoji}${m.label}") },
+                            // 标注无法渲染的表情，便于定位「某个心情不显示」
+                            label = {
+                                Text("${m.emoji}${m.label}${if (!isEmojiRenderable(m.emoji)) " ⚠" else ""}")
+                            },
                             modifier = Modifier.pressBounce(pressedScale = 0.94f)
                         )
                     }
@@ -873,6 +876,20 @@ fun MoodEditorDialog(
 }
 
 /** 单个心情的编辑表单 */
+/**
+ * 检测某个表情能否被系统字体渲染。
+ *
+ * 通知里的表情由 SystemUI 渲染，若系统字体缺少对应字形会显示为
+ * 空白或方框（例如 🫠 属 Emoji 14.0，需 Android 12L+ 才有字形）。
+ * 用它可以在用户选择表情时提前告知风险，而不是等显示在通知里才发现。
+ */
+internal fun isEmojiRenderable(emoji: String): Boolean {
+    if (emoji.isBlank()) return false
+    return runCatching {
+        android.graphics.Paint().hasGlyph(emoji)
+    }.getOrDefault(true)   // 检测失败时按「可用」处理，避免误报
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun MoodEditForm(
@@ -901,6 +918,18 @@ private fun MoodEditForm(
         )
         Spacer(Modifier.height(10.dp))
         Text("表情", style = MaterialTheme.typography.bodySmall)
+        // 当前表情若无法被系统字体渲染则明确提示，
+        // 避免用户选了一个自己手机上显示不出来的表情（通知里会更明显）
+        if (!isEmojiRenderable(mood.emoji)) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "当前表情（${mood.emoji}）在本设备上无法显示为图形，" +
+                    "可能显示为空白或方框，建议从下方另选一个。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+        Spacer(Modifier.height(6.dp))
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
