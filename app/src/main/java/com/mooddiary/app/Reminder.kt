@@ -226,26 +226,50 @@ object Reminder {
 
     // ---------- 通知 ----------
 
-    fun onTick(context: Context) {
-        if (!isEnabled(context)) return
-        if (!hasNotificationPermission(context)) return
+    /**
+     * 整点触发入口。返回值是本次触发「做了什么 / 为什么没发」的诊断说明，
+     * 供设置页的「模拟整点触发」展示给用户。
+     *
+     * 关键修复（此前通知长期不响的真正根因之一）：
+     * 精确闹钟是一次性的，靠触发后再排下一次（链式）。
+     * 但原先「未授予通知权限」等分支直接 return 而**没有续排下一次**——
+     * 只要某次触发时恰好不满足条件（例如 Android 13+ 的通知权限弹窗
+     * 还没点掉闹钟就响了），链路就永久断裂，之后每个整点都静默，
+     * 直到用户重新开关提醒。这就是反复修调度、修渠道都无效的原因。
+     *
+     * 现在除「开关已关闭」外，任何分支都会续上下一小时的闹钟。
+     */
+    fun onTick(context: Context): String {
+        if (!isEnabled(context)) {
+            // 开关已关：清掉闹钟。重新开启时 setEnabled 会重新排程。
+            cancel(context)
+            return "提醒开关当前是关闭的"
+        }
+        if (!hasNotificationPermission(context)) {
+            // 修复链路断裂：即使本次发不出，也必须续上下一小时
+            schedule(context)
+            return "未授予通知权限（已续排下一次，请到系统设置开启通知权限）"
+        }
 
         val hour = LocalTime.now().hour
 
         if (QuietHours.isQuiet(SettingsStore(context).current(), hour)) {
             schedule(context)
-            return
+            return "当前处于免打扰时段，本次不提醒（已续排下一次）"
         }
 
-        runCatching {
+        val recorded = runCatching {
             MoodDatabase.get(context).dao()
                 .findByDateHourSync(LocalDate.now().toString(), hour) != null
-        }.getOrDefault(false).let { recorded ->
-            if (recorded) { schedule(context); return }
+        }.getOrDefault(false)
+        if (recorded) {
+            schedule(context)
+            return "当前小时（$hour 点）已记录过，本次不重复提醒（已续排下一次）"
         }
 
         sendNotification(context, hour)
         schedule(context)
+        return "已发送 $hour 点的提醒通知"
     }
 
     /**

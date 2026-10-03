@@ -343,6 +343,38 @@ fun SettingsPage(
                     )
                 }
 
+                // —— 模拟整点触发（诊断） ——
+                // 不用等到整点：直接走一遍完整的触发逻辑（含续排），
+                // 把「做了什么/为什么没发」显示出来，一眼看出断在哪一环。
+                HorizontalDivider(Modifier.padding(vertical = 10.dp))
+                SettingLabel("诊断提醒")
+                Text(
+                    "不用等到整点，立即按真实流程走一遍：会检查开关、权限、" +
+                        "免打扰与当日记录，并把结果与下一步排程显示出来。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                var diagResult by remember { mutableStateOf<String?>(null) }
+                OutlinedButton(
+                    onClick = {
+                        val r = Reminder.onTick(context)
+                        diagResult = r
+                        // 顺手刷新几项会变化的状态
+                        ignoringBattery = Reminder.isIgnoringBatteryOptimizations(context)
+                    },
+                    modifier = Modifier.pressBounce(pressedScale = 0.94f)
+                ) { Text("模拟一次整点触发") }
+                diagResult?.let { r ->
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "结果：$r",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+
                 // —— 通知里显示哪些心情 ——
                 // 通知布局只有 5 个槽位，心情较多时原先按分值截断，
                 // 导致部分心情的图标不会出现在通知里。

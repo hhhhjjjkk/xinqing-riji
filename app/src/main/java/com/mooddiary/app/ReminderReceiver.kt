@@ -28,10 +28,17 @@ class ReminderReceiver : BroadcastReceiver() {
     private fun handleTick(context: Context) {
         val pending = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
-            try { Reminder.onTick(context) }
-            finally { pending.finish() }
+            try {
+                val what = Reminder.onTick(context)
+                android.util.Log.i(TAG, "整点触发：$what")
+            } catch (e: Throwable) {
+                // 任何异常都不能静默消失——记入日志，便于用 logcat 定位
+                android.util.Log.e(TAG, "整点触发异常", e)
+            } finally { pending.finish() }
         }
     }
+
+    private const val TAG = "MoodReminder"
 
     /** 在通知里点了表情：直接写库 + 取消通知，不跳转 app */
     private fun handleQuickMood(context: Context, intent: Intent) {
