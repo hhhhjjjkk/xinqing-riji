@@ -1,5 +1,7 @@
 package com.mooddiary.app
 
+private const val TAG = "MoodReminder"
+
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -37,8 +39,6 @@ class ReminderReceiver : BroadcastReceiver() {
             } finally { pending.finish() }
         }
     }
-
-    private const val TAG = "MoodReminder"
 
     /** 在通知里点了表情：直接写库 + 取消通知，不跳转 app */
     private fun handleQuickMood(context: Context, intent: Intent) {
