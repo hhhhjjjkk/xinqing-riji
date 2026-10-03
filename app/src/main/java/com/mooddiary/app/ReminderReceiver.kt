@@ -1,13 +1,13 @@
 package com.mooddiary.app
 
-private const val TAG = "MoodReminder"
-
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+
+private const val TAG = "MoodReminder"
 
 /**
  * 接收三类广播：
