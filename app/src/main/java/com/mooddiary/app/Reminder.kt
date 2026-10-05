@@ -141,6 +141,18 @@ object Reminder {
         }
     }
 
+    
+    /** 打开系统应用详情页（供用户手动开启自启动、后台运行等权限） */
+    fun openAppSettings(context: Context) {
+        runCatching {
+            val intent = android.content.Intent(
+                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS
+            ).setData(android.net.Uri.parse("package:${context.packageName}"))
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        }
+    }
+
     fun ensureChannel(context: Context) {
         if (Build.VERSION.SDK_INT >= 26) {
             val channel = NotificationChannel(
@@ -192,24 +204,38 @@ object Reminder {
         val pi = alarmIntent(context)
         val triggerAt = nextHourMillis()
 
-        // 先清掉旧的，避免同一 PendingIntent 残留多个调度
         am.cancel(pi)
 
+        // 升级：使用 setAlarmClock 替代 setExactAndAllowWhileIdle。
+        // setAlarmClock 是系统级最高优先级的唤醒 API，在国产 ROM 的深度休眠中
+        // 触发概率远高于普通精确闹钟。
+        // 系统可能会在状态栏显示一个闹钟图标，这是系统行为，无法通过代码隐藏。
+        if (Build.VERSION.SDK_INT >= 21) {
+            val showIntent = android.content.Intent(context, MainActivity::class.java)
+            val info = AlarmManager.AlarmClockInfo(
+                triggerAt, 
+                PendingIntent.getActivity(context, 0, showIntent, PendingIntent.FLAG_IMMUTABLE)
+            )
+            try {
+                am.setAlarmClock(info, pi)
+                return
+            } catch (e: SecurityException) {
+                // 若 setAlarmClock 被限制，降级尝试 setExactAndAllowWhileIdle
+            }
+        }
+
+        // 降级路径：API 31+ 且无精确闹钟权限时，走 setWindow 允许空闲触发
         if (Build.VERSION.SDK_INT >= 31 && !am.canScheduleExactAlarms()) {
-            // 无精确闹钟权限：用带窗口的「允许空闲时触发」。
-            // 比 setRepeating 可靠：系统会在窗口内唤醒，且 Doze 下仍有机会触发。
             am.setWindow(
                 AlarmManager.RTC_WAKEUP,
                 triggerAt,
                 WINDOW_MS,
                 pi
             )
-            return
+        } else {
+            // 有权限或 API < 31：用单次精确闹钟
+            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
         }
-
-        // 有权限：单次精确闹钟（会在 Doze 下触发）。
-        // 注意：不要在此之后再设 setRepeating，否则会把它覆盖掉。
-        am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
     }
 
     /** Android 12+ 是否已获准使用精确闹钟；未获准时界面应引导用户开启 */

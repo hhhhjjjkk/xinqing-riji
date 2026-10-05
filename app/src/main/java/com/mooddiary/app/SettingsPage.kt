@@ -323,11 +323,18 @@ fun SettingsPage(
                 if (!ignoringBattery) {
                     Spacer(Modifier.height(10.dp))
                     Text(
-                        "系统可能为了省电推迟或拦截提醒。建议把本应用加入电池优化白名单。",
+                        "后台被清理或进程被杀会导致闹钟失效。若遇到整点不提醒，请务必开启「自启动权限」并将电量策略设为「无限制」。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error
                     )
                     Spacer(Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = { Reminder.openAppSettings(context) },
+                        modifier = Modifier.pressBounce(pressedScale = 0.94f)
+                    ) {
+                        Text("去开启允许自启动 / 后台无限制")
+                    }
+                    Spacer(Modifier.height(8.dp))
                     OutlinedButton(
                         onClick = { Reminder.openBatteryOptimizationSettings(context) },
                         modifier = Modifier.pressBounce(pressedScale = 0.94f)
