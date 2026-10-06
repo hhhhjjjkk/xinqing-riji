@@ -323,23 +323,28 @@ fun SettingsPage(
                 if (!ignoringBattery) {
                     Spacer(Modifier.height(10.dp))
                     Text(
-                        "后台被清理或进程被杀会导致闹钟失效。若遇到整点不提醒，请务必开启「自启动权限」并将电量策略设为「无限制」。",
+                        "为什么在应用里测试正常、到了整点却不响：\n" +
+                            "在「最近任务」里划掉本应用（或系统清理后台）会清除已注册的闹钟并禁止自启动，" +
+                            "此时任何应用代码都无法把进程唤醒——这是系统的强制管控，必须由你在手机设置中放行。\n\n" +
+                            "请依次完成两步：\n" +
+                            "① 允许自启动（点击下方第一个按钮）\n" +
+                            "② 电量策略设为「无限制」/ 关闭省电优化（第二个按钮）",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error
                     )
                     Spacer(Modifier.height(10.dp))
                     OutlinedButton(
-                        onClick = { Reminder.openAppSettings(context) },
+                        onClick = { Reminder.openAutoStartSettings(context) },
                         modifier = Modifier.pressBounce(pressedScale = 0.94f)
                     ) {
-                        Text("去开启允许自启动 / 后台无限制")
+                        Text("① 开启「自启动」权限")
                     }
                     Spacer(Modifier.height(8.dp))
                     OutlinedButton(
                         onClick = { Reminder.openBatteryOptimizationSettings(context) },
                         modifier = Modifier.pressBounce(pressedScale = 0.94f)
                     ) {
-                        Text("去设置电池优化")
+                        Text("② 设为「无限制」/ 关闭省电优化")
                     }
                 } else {
                     Spacer(Modifier.height(6.dp))

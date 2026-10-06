@@ -142,14 +142,59 @@ object Reminder {
     }
 
     
-    /** 打开系统应用详情页（供用户手动开启自启动、后台运行等权限） */
-    fun openAppSettings(context: Context) {
+    /**
+     * 跳转到「自启动 / 后台运行」管理页。
+     *
+     * 说明：Android 标准并没有「自启动权限」这种可声明的权限，
+     * 它是国内厂商 ROM（小米、华为、OPPO、vivo 等）自行加入的管控项。
+     * 若用户在最近任务里划掉应用（force stop），系统会清除该应用
+     * 已注册的全部闹钟并禁止其自启动——此时任何纯应用层的努力都无法
+     * 唤醒进程，必须由用户在系统设置中放行。
+     *
+     * 因此这里按厂商逐个尝试直达其自启动管理页，全部失败则退回
+     * 应用详情页（用户可在其中找到相关开关）。
+     */
+    fun openAutoStartSettings(context: Context) {
+        val pkg = context.packageName
+        // 各厂商的自启动管理页（按常见程度排序）
+        val candidates = listOf(
+            // 小米 / Redmi
+            "com.miui.securitycenter" to "com.miui.permcenter.autostart.AutoStartManagementActivity",
+            // 华为 / 荣耀
+            "com.huawei.systemmanager" to "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity",
+            "com.huawei.systemmanager" to "com.huawei.systemmanager.optimize.process.ProtectActivity",
+            // OPPO / 一加 / realme
+            "com.coloros.safecenter" to "com.coloros.safecenter.permission.startup.StartupAppListActivity",
+            "com.coloros.safecenter" to "com.coloros.safecenter.startupapp.StartupAppListActivity",
+            "com.oppo.safe" to "com.oppo.safe.permission.startup.StartupAppListActivity",
+            // vivo / iQOO
+            "com.vivo.permissionmanager" to "com.vivo.permissionmanager.activity.BgStartUpManagerActivity",
+            "com.iqoo.secure" to "com.iqoo.secure.ui.phoneoptimize.AddWhiteListActivity",
+            // 三星
+            "com.samsung.android.lool" to "com.samsung.android.sm.ui.battery.BatteryActivity",
+            // 联想 / 其他
+            "com.lenovo.security" to "com.lenovo.security.purebackground.PureBackgroundActivity"
+        )
+        for ((p, cls) in candidates) {
+            val ok = runCatching {
+                context.startActivity(
+                    android.content.Intent().apply {
+                        setClassName(p, cls)
+                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                )
+                true
+            }.getOrDefault(false)
+            if (ok) return
+        }
+        // 全部失败：退回应用详情页（部分 ROM 的开关就在此处）
         runCatching {
-            val intent = android.content.Intent(
-                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS
-            ).setData(android.net.Uri.parse("package:${context.packageName}"))
-            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
+            context.startActivity(
+                android.content.Intent(
+                    android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS
+                ).setData(android.net.Uri.parse("package:$pkg"))
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
         }
     }
 
