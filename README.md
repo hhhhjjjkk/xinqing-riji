@@ -129,7 +129,8 @@ JPEG 生成：白底已转透明，边缘抗锯齿保留为半透明，任何底
 
 ## 🔔 提醒可靠性
 
-定时提醒使用 **AlarmManager 一次性精确闹钟**（`setExactAndAllowWhileIdle`），
+定时提醒使用 **AlarmManager 一次性闹钟**（优先 `setAlarmClock`，权限允许时使用
+`setExactAndAllowWhileIdle`；Android 12+ 未授予精确闹钟权限时退化为允许空闲触发的时间窗口），
 每次触发后再排下一次（链式调度）。
 
 > 为什么不用 WorkManager 周期任务、也不用 `setRepeating`：
@@ -155,5 +156,6 @@ JPEG 生成：白底已转透明，边缘抗锯齿保留为半透明，任何底
 其余保障：
 
 - 开机（`BOOT_COMPLETED`）与应用升级（`MY_PACKAGE_REPLACED`）后由广播自动恢复调度
+- 每次打开应用时都会按已保存的开关状态重新同步闹钟；若系统或设备 ROM 清除了排程，重新打开应用即可恢复
 - 通知编号包含日期，因此跨天后不会替换掉前一天尚未处理的通知
 - 通知可手动滑掉，不会常驻状态栏

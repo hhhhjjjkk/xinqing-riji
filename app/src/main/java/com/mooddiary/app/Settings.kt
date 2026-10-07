@@ -182,9 +182,7 @@ class SettingsStore(context: Context) {
     }
 
     fun syncReminder() {
-        if (read().reminderEnabled != Reminder.isEnabled(appContext)) {
-            Reminder.setEnabled(appContext, read().reminderEnabled)
-        }
+        Reminder.setEnabled(appContext, read().reminderEnabled)
     }
 
     companion object {
