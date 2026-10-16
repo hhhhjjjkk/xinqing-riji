@@ -976,18 +976,19 @@ fun FloatingNavBar(
         // ① 玻璃胶囊本体（纯视觉：与页面同色 + 描边）
         val scheme = MaterialTheme.colorScheme
         val glassDark = scheme.surface.luminance() < 0.5f
+        // 视频样式：圆角 32dp 的深色玻璃药丸
+        val barShape = RoundedCornerShape(32.dp)
+        // 玻璃底色：深色主题用 #1F2126（与视频一致）；
+        // 浅色主题保持跟随主题的表面色（浅底玻璃）
+        val barBase = if (glassDark) BAR_GLASS_DARK else scheme.surface
         Box(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(percent = 50))
-                // 把导航栏当作一面真实的墙：光源处最亮，
-                // 亮度沿水平方向向左右两侧扩散衰减（而非均匀发光）
+                .clip(barShape)
+                // 玻璃三层之底层：深色实底（含光效染色，光照仍打在这面墙上）
                 .background(
                     wallLightBrush(
-                        surface = scheme.surface,
-                        // 深色主题：光偏白提亮（深底上更醒目）
-                        // 浅色主题：直接用强调色（浅底上偏白的光几乎看不出，
-                        //           用强调色才能形成明显的彩色光带）
+                        surface = barBase,
                         light = if (glassDark) {
                             androidx.compose.ui.graphics.lerp(accent, Color.White, 0.30f)
                         } else {
@@ -995,22 +996,22 @@ fun FloatingNavBar(
                         },
                         centerFrac = (pillX + pillWPx / 2f) /
                             with(density) { maxWidth.toPx() }.coerceAtLeast(1f),
-                        // 浅色底上同样的强度会更不明显，适当加强
                         strength = glowStrength * (if (glassDark) 0.30f else 0.42f) * glowFactor
                     ),
-                    RoundedCornerShape(percent = 50)
+                    barShape
                 )
-                .border(
-                    1.dp,
-                    androidx.compose.ui.graphics.Brush.linearGradient(
+                // 玻璃三层之中层：顶部高光（上亮下透明的垂直渐变）
+                .background(
+                    androidx.compose.ui.graphics.Brush.verticalGradient(
                         listOf(
-                            Color.White.copy(alpha = if (glassDark) 0.22f else 0.80f),
-                            scheme.primary.copy(alpha = 0.22f),
-                            Color.White.copy(alpha = if (glassDark) 0.08f else 0.40f)
+                            Color.White.copy(alpha = if (glassDark) 0.25f else 0.50f),
+                            Color.Transparent
                         )
                     ),
-                    RoundedCornerShape(percent = 50)
+                    barShape
                 )
+                // 玻璃三层之顶层：1px 内描边（模拟玻璃厚度）
+                .border(1.dp, PILL_INDICATOR_STROKE, barShape)
         ) {
             Row(
                 Modifier
@@ -1158,9 +1159,9 @@ fun FloatingNavBar(
             )
         }
 
-        // ③ 高光椭圆：光源本体。
-        // 不再绘制向外散发的独立光圈——光照效果由导航栏「墙面」与
-        // 被照亮元素本身呈现（见 wallLightBrush 与 NavItem）。
+        // ③ 选中指示器：参考视频的「方形卡扣」样式——
+        // 圆角方块、深色底、1px 亮描边，且上下凸出导航条（像卡扣扣在条上）。
+        // 交互逻辑（跟手、Q 弹、光效）全部保留，仅替换视觉。
         Box(
             Modifier
                 .align(Alignment.CenterStart)
@@ -1173,9 +1174,9 @@ fun FloatingNavBar(
                     scaleX = highlightScale
                     scaleY = highlightScale
                 }
-                .clip(RoundedCornerShape(percent = 50))
-                .background(accent.copy(alpha = 0.16f))
-                .border(1.5.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(percent = 50))
+                .clip(RoundedCornerShape(HIGHLIGHT_RADIUS))
+                .background(PILL_INDICATOR_BG)
+                .border(1.dp, PILL_INDICATOR_STROKE, RoundedCornerShape(HIGHLIGHT_RADIUS))
         )
     }
 }
@@ -1184,8 +1185,22 @@ fun FloatingNavBar(
 private const val HIGHLIGHT_LIFT_SCALE = 1.25f
 
 /** 选中态高光椭圆的尺寸：四个位置统一 */
-private val HIGHLIGHT_W = 66.dp
-private val HIGHLIGHT_H = 48.dp
+private val HIGHLIGHT_W = 60.dp
+private val HIGHLIGHT_H = 62.dp
+
+/** 卡扣圆角（视频样式：接近方形的大圆角，非正圆） */
+private val HIGHLIGHT_RADIUS = 20.dp
+
+/** 卡扣底色（深色玻璃）与描边（1px 亮线）——取自参考视频 */
+private val PILL_INDICATOR_BG = Color(0xFF2E323A)
+private val PILL_INDICATOR_STROKE = Color(0x33FFFFFF)
+
+/** 选中/未选中的图标与文字颜色（视频配色） */
+private val TAB_SELECTED = Color(0xFFDCE775)
+private val TAB_UNSELECTED = Color(0xFF9AA0A6)
+
+/** 导航条容器：深色玻璃底（深色主题用，与视频一致） */
+private val BAR_GLASS_DARK = Color(0xFF1F2126)
 
 /**
  * 缩短长按阈值的 ViewConfiguration：系统默认约 500ms，对「长按拖动」偏高，
@@ -1230,8 +1245,8 @@ private fun NavItem(
         label = "navAmbient"
     )
 
-    // 平常态：跟随主题（选中用强调色，未选中用中性灰）
-    val normal = if (active) accent else MaterialTheme.colorScheme.onSurfaceVariant
+    // 平常态：视频配色（选中亮黄绿 #DCE775，未选中中性灰 #9AA0A6）
+    val normal = if (active) TAB_SELECTED else TAB_UNSELECTED
 
     // 两步着色：
     // ① 长按期间，四个图标与文字整体转入一个"高对比中间态"
