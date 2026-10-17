@@ -1364,10 +1364,16 @@ fun CalendarPage(
 
         val start = month.atDay(1)
         // dayOfWeek.value: 周一=1 … 周日=7
+        //
+        // 周一起始时的公式此前写错为 (value + 5) % 7：
+        // 它算出的是「周日起始」的列号（周二=0 列），
+        // 导致 MONDAY 模式下整月每一天都错位一天——
+        // 表现为「日历上对应的星期几和现实里的对不上」。
+        // 正确公式：周一排在首列时，列号就是 value - 1（周一=0 列 … 周日=6 列）。
         val paddingDays = if (weekStart == WeekStart.SUNDAY) {
-            start.dayOfWeek.value % 7          // 周日排在首列
+            start.dayOfWeek.value % 7          // 周日排在首列：周日=0 … 周六=6
         } else {
-            (start.dayOfWeek.value + 5) % 7    // 周一排在首列
+            start.dayOfWeek.value - 1          // 周一排在首列：周一=0 … 周日=6
         }
         val total = paddingDays + month.lengthOfMonth()
         val rows = (total + 6) / 7
