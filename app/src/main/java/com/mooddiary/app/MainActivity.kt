@@ -1181,7 +1181,11 @@ fun FloatingNavBar(
 }
 
 /** 长按时椭圆放大的倍数 */
-private const val HIGHLIGHT_LIFT_SCALE = 1.25f
+/**
+ * 长按拖动时椭圆放大的倍数（1.0 = 原大小）。
+ * 用户要求在原 1.25 基础上「变大一点点」→ 1.35。
+ */
+private const val HIGHLIGHT_LIFT_SCALE = 1.35f
 
 /** 选中态高光椭圆的尺寸：四个位置统一 */
 private val HIGHLIGHT_W = 66.dp
