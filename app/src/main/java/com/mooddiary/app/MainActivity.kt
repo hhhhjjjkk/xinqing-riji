@@ -552,7 +552,7 @@ fun MoodDiaryTheme(
     // 注意：这里必须改 fontScale（只影响 sp → px），
     // 不能改 density（会影响所有 dp → px）。
     // 若把 density 一起放大，所有 dp 尺寸（含导航栏、椭圆尺寸、
-    // 槽位宽度）的实际像素值都会变化，而椭圆位置 pillX 是累积的像素状态，
+    // 槽位宽度）的实际像素值都会变化，而椭圆位置 pillXState 是累积的像素状态，
     // 不会随之重算，于是"调完字号后长按松手，椭圆位置出现误差"。
     val density = LocalDensity.current
     val scaledDensity = remember(density, fontLevel) {
@@ -892,7 +892,10 @@ fun FloatingNavBar(
         label = "highlightScale"
     )
 
-    val glowStrength by animateFloatAsState(
+    // 用 State 对象而非 by 委托：需要下传给 NavItem（把重组作用域
+    // 从整条导航栏收缩到 4 个小项），也要在 drawBehind 绘制阶段读取
+    // （绘制阶段读 State 只触发重绘、不触发重组）
+    val glowStrengthState = animateFloatAsState(
         targetValue = if (showGlow && glowIndex != null) 1f else 0f,
         animationSpec = tween(durationMillis = 220),
         label = "glowStrength"
@@ -918,16 +921,23 @@ fun FloatingNavBar(
         fun slotAt(x: Float): Int =
             ((x - rowPadPx) / slotPx).toInt().coerceIn(0, items.size - 1)
 
-        // 由椭圆位置换算出的**连续页位置**（小数），用于驱动页面跟随
-        fun pagePosOf(pill: Float): Float =
+        // 由椭圆位置换算出的**连续页位置**（小数），用于驱动页面跟随。
+        // 声明为函数类型的 val（而非局部 fun）——函数名不能直接作为值
+        // 传给 NavItem 的参数，lambda 可以
+        val pagePosOf: (Float) -> Float = { pill ->
             (pill + pillWPx / 2f - rowPadPx - slotPx / 2f) / slotPx
+        }
 
         val scope = rememberCoroutineScope()
-        var pillX by remember { mutableFloatStateOf(0f) }
+        // 药丸位置用 State 对象持有（而非 by 委托）：
+        // 绘制层（drawBehind / graphicsLayer 的 lambda）直接读 .value，
+        // 值变化只触发重绘、不触发重组——拖动时每帧零重组开销。
+        // （by 委托的读取若发生在组合作用域内会触发重组）
+        val pillXState = remember { mutableFloatStateOf(0f) }
         // 导航栏跟随位移：椭圆越界时整条导航栏小幅跟动，形成"整体被拉动"的层次
         // 椭圆的垂直弹性位移（上下拖动时的 Q 弹，松手弹回）。
         // 注意：Q 弹作用在椭圆自身，导航栏保持不动。
-        var pillY by remember { mutableFloatStateOf(0f) }
+        val pillYState = remember { mutableFloatStateOf(0f) }
         var pillYJob by remember { mutableStateOf<Job?>(null) }
         var settleJob by remember { mutableStateOf<Job?>(null) }
         var firstLayout by remember { mutableStateOf(true) }
@@ -936,14 +946,14 @@ fun FloatingNavBar(
             settleJob?.cancel()
             settleJob = scope.launch {
                 animate(
-                    initialValue = pillX,
+                    initialValue = pillXState.value,
                     targetValue = target,
                     animationSpec = spring(
                         // 带回弹的阻尼：松手落地时有一点 Q 弹
                         dampingRatio = Spring.DampingRatioLowBouncy,
                         stiffness = Spring.StiffnessMedium
                     )
-                ) { v, _ -> pillX = v }
+                ) { v, _ -> pillXState.value = v }
             }
         }
 
@@ -951,13 +961,13 @@ fun FloatingNavBar(
             pillYJob?.cancel()
             pillYJob = scope.launch {
                 animate(
-                    initialValue = pillY,
+                    initialValue = pillYState.value,
                     targetValue = target,
                     animationSpec = spring(
                         dampingRatio = Spring.DampingRatioLowBouncy,
                         stiffness = Spring.StiffnessMedium
                     )
-                ) { v, _ -> pillY = v }
+                ) { v, _ -> pillYState.value = v }
             }
         }
 
@@ -966,51 +976,109 @@ fun FloatingNavBar(
             if (scrubbing) return@LaunchedEffect
             val target = pillTargetPx(activeIndex)
             if (firstLayout) {
-                pillX = target
+                pillXState.value = target
                 firstLayout = false
             } else {
                 animatePillTo(target)
             }
         }
 
-        // ① 玻璃胶囊本体（纯视觉：与页面同色 + 描边）
+        // ① 玻璃胶囊本体：液态玻璃质感，四层绘制全部下沉到 drawBehind
+        //    （绘制阶段读 State，不触发重组；此路径非「背景模糊」方案，
+        //     而是与页面同色的玻璃拟态——染色斜面 + 镜面反光 + 方向性边缘光）
         val scheme = MaterialTheme.colorScheme
         val glassDark = scheme.surface.luminance() < 0.5f
+        // L1 玻璃底（厚度斜面）：上缘迎光提亮，底部沉降，强调色参与染色
+        val glassBaseStops: Array<Pair<Float, Color>> = if (glassDark) {
+            arrayOf(
+                0.00f to androidx.compose.ui.graphics.lerp(scheme.surface, Color.White, 0.10f),
+                0.45f to androidx.compose.ui.graphics.lerp(scheme.surface, accent, 0.16f),
+                1.00f to androidx.compose.ui.graphics.lerp(scheme.surface, accent, 0.06f)
+            )
+        } else {
+            arrayOf(
+                0.00f to androidx.compose.ui.graphics.lerp(Color.White, scheme.surface, 0.10f),
+                0.45f to androidx.compose.ui.graphics.lerp(Color.White, accent, 0.10f),
+                1.00f to androidx.compose.ui.graphics.lerp(Color.White, scheme.surface, 0.38f)
+            )
+        }
+        // L3 顶部反光滑带（镜面反光）：顶端一条快速衰减的亮带
+        val specularTop = Color.White.copy(alpha = if (glassDark) 0.10f else 0.30f)
+        val specularMid = Color.White.copy(alpha = if (glassDark) 0.02f else 0.06f)
+        // L4 方向性边缘光：左上迎光边亮、右下背光边暗（沿对角线衰减）
+        val edgeStops: Array<Pair<Float, Color>> = if (glassDark) {
+            arrayOf(
+                0f to Color.White.copy(alpha = 0.32f),
+                0.55f to accent.copy(alpha = 0.22f),
+                1f to Color.White.copy(alpha = 0.05f)
+            )
+        } else {
+            arrayOf(
+                0f to Color.White.copy(alpha = 0.95f),
+                0.55f to accent.copy(alpha = 0.20f),
+                1f to Color.White.copy(alpha = 0.40f)
+            )
+        }
+        // 墙光颜色：深色主题光偏白提亮（深底上更醒目）；
+        // 浅色主题用强调色（浅底上偏白的光几乎看不出，
+        // 用强调色才能形成明显的彩色光带）
+        val wallLight = if (glassDark) {
+            androidx.compose.ui.graphics.lerp(accent, Color.White, 0.30f)
+        } else {
+            androidx.compose.ui.graphics.lerp(accent, Color.Black, 0.10f)
+        }
         Box(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(percent = 50))
-                // 把导航栏当作一面真实的墙：光源处最亮，
-                // 亮度沿水平方向向左右两侧扩散衰减（而非均匀发光）
-                .background(
-                    wallLightBrush(
-                        surface = scheme.surface,
-                        // 深色主题：光偏白提亮（深底上更醒目）
-                        // 浅色主题：直接用强调色（浅底上偏白的光几乎看不出，
-                        //           用强调色才能形成明显的彩色光带）
-                        light = if (glassDark) {
-                            androidx.compose.ui.graphics.lerp(accent, Color.White, 0.30f)
-                        } else {
-                            androidx.compose.ui.graphics.lerp(accent, Color.Black, 0.10f)
-                        },
-                        centerFrac = (pillX + pillWPx / 2f) /
-                            with(density) { maxWidth.toPx() }.coerceAtLeast(1f),
-                        // 浅色底上同样的强度会更不明显，适当加强
-                        strength = glowStrength * (if (glassDark) 0.30f else 0.42f) * glowFactor
-                    ),
-                    RoundedCornerShape(percent = 50)
-                )
-                .border(
-                    1.dp,
-                    androidx.compose.ui.graphics.Brush.linearGradient(
-                        listOf(
-                            Color.White.copy(alpha = if (glassDark) 0.22f else 0.80f),
-                            scheme.primary.copy(alpha = 0.22f),
-                            Color.White.copy(alpha = if (glassDark) 0.08f else 0.40f)
+                .drawBehind {
+                    val w = size.width
+                    val h = size.height
+                    // L1 玻璃底：染色 + 厚度斜面（垂直渐变）
+                    drawRect(
+                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                            *glassBaseStops
                         )
-                    ),
-                    RoundedCornerShape(percent = 50)
-                )
+                    )
+                    // L2 墙光：把导航栏当作一面真实的墙，光源处最亮，
+                    //    亮度沿水平方向向左右两侧扩散衰减（而非均匀发光）。
+                    //    surface 传全透明 → 渐变自带 alpha，叠加在玻璃底之上。
+                    //    浅色底上同样的强度更不明显，适当加强
+                    val gs = glowStrengthState.value *
+                        (if (glassDark) 0.30f else 0.42f) * glowFactor
+                    if (gs > 0.001f) {
+                        drawRect(
+                            wallLightBrush(
+                                surface = Color.Transparent,
+                                light = wallLight,
+                                centerFrac = (pillXState.value + pillWPx / 2f) /
+                                    w.coerceAtLeast(1f),
+                                strength = gs
+                            )
+                        )
+                    }
+                    // L3 顶部反光滑带
+                    drawRect(
+                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                            0f to specularTop,
+                            0.18f to specularMid,
+                            0.35f to Color.Transparent,
+                            1f to Color.Transparent
+                        )
+                    )
+                    // L4 方向性边缘光：描边按 2dp 绘制、经圆角裁剪后可见约 1dp
+                    val strokePx = 2.dp.toPx()
+                    drawRect(
+                        brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                            colorStops = edgeStops,
+                            start = Offset(0f, 0f),
+                            end = Offset(w, h)
+                        ),
+                        topLeft = Offset(strokePx / 2f, strokePx / 2f),
+                        size = Size(w - strokePx, h - strokePx),
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = strokePx)
+                    )
+                }
         ) {
             Row(
                 Modifier
@@ -1018,22 +1086,18 @@ fun FloatingNavBar(
                     .padding(horizontal = rowPad, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // 当前光源位置（连续，用于计算每个项目接收到多少光）
-                val lightCenter = pagePosOf(pillX)
+                // 光源位置与受光量的计算下沉到 NavItem 内部（读 State 对象）：
+                // 拖动时只有 4 个小项各自重组，父层零重组
                 items.forEachIndexed { idx, item ->
-                    // 受光量：距离 0 → 1.0，距离 1 → 0.5，距离 2 → 0，再远不受影响
-                    val dist = kotlin.math.abs(idx - lightCenter)
-                    // 只照亮相邻项：距离 0 → 1.0，1 → 0.5，2 及更远 → 0
-                    val light = ((2f - dist) / 2f).coerceIn(0f, 1f) * glowStrength
                     NavItem(
                         label = item.first,
                         icon = item.second,
                         active = idx == activeIndex,
                         accent = accent,
-                        // 长按期间整体变白（四个一致）
-                        ambient = glowStrength,
-                        // 光照射到的地方呈现光的颜色
-                        lightAmount = light,
+                        index = idx,
+                        pillXState = pillXState,
+                        glowStrengthState = glowStrengthState,
+                        pagePosOf = pagePosOf,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -1080,7 +1144,7 @@ fun FloatingNavBar(
                                 settleJob?.cancel()
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
 
-                                val startPill = pillX
+                                val startPill = pillXState.value
                                 val startX = lp.position.x
                                 val startY = lp.position.y
                                 // 垂直方向的橡皮筋行程（约半个按钮高度），限制上下位移幅度
@@ -1109,10 +1173,10 @@ fun FloatingNavBar(
                                     // 上下滑动同样带 Q 弹：作用在**椭圆自身**，
                                     // 越拉越费劲，松手弹回，导航栏保持不动
                                     val dy = ch.position.y - startY
-                                    pillY = rubberBandSigned(
+                                    pillYState.value = rubberBandSigned(
                                         dy, if (dy < 0f) upRange else vertRange
                                     )
-                                    pillX = nx
+                                    pillXState.value = nx
 
                                     // 连续页位置 → 拆成整页 + 小数偏移，
                                     // 让内容页随椭圆平滑移动（这才是"动画"）
@@ -1158,24 +1222,82 @@ fun FloatingNavBar(
             )
         }
 
-        // ③ 高光椭圆：光源本体。
-        // 不再绘制向外散发的独立光圈——光照效果由导航栏「墙面」与
-        // 被照亮元素本身呈现（见 wallLightBrush 与 NavItem）。
+        // ③ 高光椭圆（药丸指示器）：光源本体，玻璃化处理。
+        // 位移与缩放全部下沉到 graphicsLayer（图层阶段执行，不触发布局、
+        // 不触发重组）；不再绘制向外散发的独立光圈——光照效果由导航栏
+        // 「墙面」与被照亮元素本身呈现（见 wallLightBrush 与 NavItem）。
+        // 椭圆玻璃配色在重组时预计算，绘制阶段零颜色分配
+        val pillBaseStops: Array<Pair<Float, Color>> = if (glassDark) {
+            arrayOf(
+                0f to androidx.compose.ui.graphics.lerp(Color.White, accent, 0.18f)
+                    .copy(alpha = 0.22f),
+                1f to androidx.compose.ui.graphics.lerp(Color.White, accent, 0.35f)
+                    .copy(alpha = 0.10f)
+            )
+        } else {
+            arrayOf(
+                0f to Color.White.copy(alpha = 0.75f),
+                1f to androidx.compose.ui.graphics.lerp(Color.White, accent, 0.18f)
+                    .copy(alpha = 0.55f)
+            )
+        }
+        val pillSpecularTop = Color.White.copy(alpha = if (glassDark) 0.16f else 0.45f)
+        val pillEdgeStops: Array<Pair<Float, Color>> = if (glassDark) {
+            arrayOf(
+                0f to Color.White.copy(alpha = 0.50f),
+                0.5f to accent.copy(alpha = 0.30f),
+                1f to Color.White.copy(alpha = 0.10f)
+            )
+        } else {
+            arrayOf(
+                0f to Color.White.copy(alpha = 0.95f),
+                0.5f to accent.copy(alpha = 0.35f),
+                1f to Color.White.copy(alpha = 0.25f)
+            )
+        }
         Box(
             Modifier
                 .align(Alignment.CenterStart)
-                .offset(
-                    x = with(density) { pillX.toDp() },
-                    y = with(density) { pillY.toDp() }
-                )
                 .size(HIGHLIGHT_W, HIGHLIGHT_H)
                 .graphicsLayer {
+                    // 位移与缩放都在图层阶段完成：每帧只重绘，不重组、不重新布局
+                    // （此前用 .offset()，属于布局阶段读状态，每帧触发重组+重排）
+                    translationX = pillXState.value
+                    translationY = pillYState.value
                     scaleX = highlightScale
                     scaleY = highlightScale
                 }
                 .clip(RoundedCornerShape(percent = 50))
-                .background(accent.copy(alpha = 0.16f))
-                .border(1.5.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(percent = 50))
+                .drawBehind {
+                    val w = size.width
+                    val h = size.height
+                    // 玻璃底：薄玻璃（顶部受光提亮，底部微染强调色）
+                    drawRect(
+                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                            *pillBaseStops
+                        )
+                    )
+                    // 顶部反光滑带
+                    drawRect(
+                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                            0f to pillSpecularTop,
+                            0.5f to Color.Transparent,
+                            1f to Color.Transparent
+                        )
+                    )
+                    // 方向性描边：左上亮 → 右下暗（3dp 绘制、裁剪后可见约 1.5dp）
+                    val strokePx = 3.dp.toPx()
+                    drawRect(
+                        brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                            colorStops = pillEdgeStops,
+                            start = Offset(0f, 0f),
+                            end = Offset(w, h)
+                        ),
+                        topLeft = Offset(strokePx / 2f, strokePx / 2f),
+                        size = Size(w - strokePx, h - strokePx),
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = strokePx)
+                    )
+                }
         )
     }
 }
@@ -1205,9 +1327,12 @@ private class ShortLongPressViewConfiguration(
 /**
  * 导航项。
  *
- * lightAmount = 从椭圆光源接收到的光量 0..1：
- * - 提高图标与文字的亮度
- * - 并向光的颜色（强调色）染色
+ * 受光计算内聚在本项内：直接读 pillXState / glowStrengthState，
+ * 拖动时只有本项重组，不牵连父层导航栏（重组作用域隔离）。
+ *
+ * 两步着色：
+ * - 长按期间整体转入「高对比中间态」（见下方 ambient 逻辑）
+ * - 被光照射到的位置，再从中间态变为**光的颜色**（强调色）
  * 这是"被光照射"的效果——元素本身不发光，只是被照亮、被染色。
  */
 @Composable
@@ -1216,20 +1341,30 @@ private fun NavItem(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     active: Boolean,
     accent: Color,
-    /** 长按环境强度 0..1：>0 时图标与文字整体转为白色 */
-    ambient: Float = 0f,
-    /** 该位置接收到的光量 0..1：被光照到则呈现光的颜色 */
-    lightAmount: Float = 0f,
+    /** 本项在导航栏中的索引（用于计算与光源的距离） */
+    index: Int,
+    /** 药丸（光源）横向位置的 State 对象：组合阶段读 .value，
+     *  状态变化只重组本项、只重绘胶囊与椭圆 */
+    pillXState: State<Float>,
+    /** 光照强度 0..1 的 State 对象（动画值，长按亮起） */
+    glowStrengthState: State<Float>,
+    /** 由药丸位置换算连续页位置的函数（纯计算，捕获密度相关常量） */
+    pagePosOf: (Float) -> Float,
     modifier: Modifier = Modifier
 ) {
-    // 受光量做平滑过渡，避免跟随手指时颜色跳动
+    // 当前光源位置（连续，用于计算每个项目接收到多少光）
+    val lightCenter = pagePosOf(pillXState.value)
+    // 受光量做平滑过渡，避免跟随手指时颜色跳动。
+    // 只照亮相邻项：距离 0 → 1.0，1 → 0.5，2 及更远 → 0
     val light by animateFloatAsState(
-        targetValue = lightAmount.coerceIn(0f, 1f),
+        targetValue = (((2f - kotlin.math.abs(index - lightCenter)) / 2f)
+            .coerceIn(0f, 1f)) * glowStrengthState.value,
         animationSpec = tween(durationMillis = 90),
         label = "navLight"
     )
+    // 长按环境强度：>0 时图标与文字整体转为高对比中间态
     val amb by animateFloatAsState(
-        targetValue = ambient.coerceIn(0f, 1f),
+        targetValue = glowStrengthState.value.coerceIn(0f, 1f),
         animationSpec = tween(durationMillis = 160),
         label = "navAmbient"
     )
