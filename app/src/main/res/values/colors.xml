@@ -2,4 +2,9 @@
 <resources>
     <!-- 图标底色（白）：矢量背景见 drawable/ic_launcher_background.xml -->
     <color name="ic_launcher_background">#FFFFFF</color>
+
+    <!-- 冷启动占位背景（浅色）：AMBER 强调色 9% 淡染 surface 的实测合成值，
+         复刻 MainActivity 首屏渐变（launch_bg_top → 40% 处 → launch_bg_bottom） -->
+    <color name="launch_bg_top">#FDF0E6</color>
+    <color name="launch_bg_bottom">#FFFBFE</color>
 </resources>

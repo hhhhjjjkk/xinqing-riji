@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 冷启动占位背景（深色）：AMBER darkPrimary 14% 淡染 surface 的实测合成值。
+         pureBlack 模式用户从 #1C1B1F 跳到纯黑仅占位期几十毫秒，可接受 -->
+    <color name="launch_bg_top">#3C3128</color>
+    <color name="launch_bg_bottom">#1C1B1F</color>
+</resources>
