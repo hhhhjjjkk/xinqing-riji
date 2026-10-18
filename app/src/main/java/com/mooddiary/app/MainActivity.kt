@@ -14,29 +14,14 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.animate
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInParent
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
-import androidx.compose.ui.input.pointer.positionChange
-import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -59,12 +44,10 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.compositeOver
@@ -76,7 +59,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.room.*
@@ -84,16 +66,13 @@ import androidx.room.withTransaction
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Locale
-import kotlin.math.roundToInt
 
 /** 备注长度上限，防止超长文本整段进内存与数据库 */
 const val MAX_NOTE_LENGTH = 500
@@ -656,11 +635,15 @@ fun MoodDiaryApp(
                 actions = { if (pagerState.currentPage != 3) ReminderToggle(store) }
             )
         },
-        // 悬浮胶囊导航：不贴边、圆角、四项等分
+        // 底部导航栏由 Flutter module（flutter_module/lib/navbar_app.dart）渲染：
+        // 液态玻璃 + scrub 长按拖页交互与 sample 1:1，且不依赖 Android 13+
+        // 的框架级材质——Flutter 引擎自带 GPU 着色器管线，全版本真玻璃。
         bottomBar = {
-            FloatingNavBar(
-                items = navItems,
+            FlutterNavBar(
                 selected = pagerState.currentPage,
+                dark = bgSurface.luminance() < 0.5f,
+                bgTop = bgTop,
+                bgBottom = bgSurface,
                 onSelect = { page ->
                     if (page != pendingPage || !pagerState.isScrollInProgress) {
                         pendingPage = page
@@ -677,8 +660,7 @@ fun MoodDiaryApp(
                 onScrubEnd = { page ->
                     scope.launch { pagerState.animateScrollToPage(page) }
                 },
-                showGlow = settings.immersiveGlow,
-                glowFactor = settings.glowLevel.factor()
+                modifier = Modifier.fillMaxWidth().height(72.dp)
             )
         },
         // 添加按钮回到右下角，保留胶囊形状。
@@ -775,628 +757,6 @@ fun MoodDiaryApp(
                 scope.launch { vm.overwrite(p.date, p.hour, p.moodId, p.note, p.old, p.conflict) }
             }
         )
-    }
-}
-
-/**
- * 橡皮筋阻尼（用于拖到两端后继续拖动的手感）：
- * 返回被压缩后的越界位移——越往外拉，实际位移增长越慢，
- * 视觉上像被橡皮筋拉住，松手后弹回。
- *
- * @param over      超出边界的原始位移（正值）
- * @param dimension 参考行程，越大越"软"
- */
-private fun rubberBandSigned(offset: Float, dimension: Float, constant: Float = 0.55f): Float {
-    val sign = if (offset < 0f) -1f else 1f
-    return sign * rubberBand(kotlin.math.abs(offset), dimension, constant)
-}
-
-private fun rubberBand(over: Float, dimension: Float, constant: Float = 0.55f): Float {
-    val d = dimension.coerceAtLeast(1f)
-    val abs = kotlin.math.abs(over)
-    if (abs <= 0f) return 0f
-    return (1f - 1f / (abs * constant / d + 1f)) * d
-}
-
-/**
- * 把导航栏当作一面真实的墙来打光：
- * 光源处最亮，亮度沿**水平方向**向左右两侧扩散衰减，
- * 形成类似真实墙面受光的效果（而不是整条均匀发光）。
- *
- * @param centerFrac 光源在导航条上的横向位置比例 0..1
- * @param strength   光照强度 0..1，为 0 时整条为纯表面色
- */
-private fun wallLightBrush(
-    surface: Color,
-    light: Color,
-    centerFrac: Float,
-    strength: Float
-): androidx.compose.ui.graphics.Brush {
-    if (strength <= 0.001f) {
-        return androidx.compose.ui.graphics.Brush.horizontalGradient(
-            0f to surface, 1f to surface
-        )
-    }
-    val c = centerFrac.coerceIn(0f, 1f)
-    fun mix(f: Float) = androidx.compose.ui.graphics.lerp(
-        surface, light, (f * strength).coerceIn(0f, 1f)
-    )
-    val stops = listOf(
-        0f to surface,
-        (c - 0.40f) to surface,
-        (c - 0.20f) to mix(0.18f),
-        (c - 0.09f) to mix(0.48f),
-        c to mix(1f),
-        (c + 0.09f) to mix(0.48f),
-        (c + 0.20f) to mix(0.18f),
-        (c + 0.40f) to surface,
-        1f to surface
-    ).map { (f, col) -> f.coerceIn(0f, 1f) to col }
-        .sortedBy { it.first }
-        .distinctBy { (it.first * 1000f).toInt() }   // 保证 stop 严格递增
-    return androidx.compose.ui.graphics.Brush.horizontalGradient(*stops.toTypedArray())
-}
-
-/**
- * 悬浮胶囊导航栏（四项等分）。
- *
- * 三层结构，职责单一：
- *   ① 玻璃胶囊本体 —— 纯视觉（仅描边，与页面同色，无割裂）
- *   ② 单一指针层 —— 铺满导航栏且静止，处理点击与长按拖动
- *   ③ 高光椭圆 —— 光源本体，光晕在其自身坐标系内绘制（不会错位）
- *
- * 光效（椭圆本身不绘制向外散发的独立光圈）：
- * - 椭圆作为光源，其亮度体现在导航栏这面「墙」上：
- *   墙面在光源处最亮，沿水平方向向左右两侧扩散衰减
- * - 被光照到的相邻项目会变白并被染上光的颜色——
- *   受光量按与光源的距离衰减，只作用于相邻项
- * - 光照由墙面与被照亮元素本身呈现，而非叠一圈光环
- *
- * Q 弹（作用在椭圆自身，导航栏保持不动）：
- * 拖到两端后继续拖动，或上下拖动时，椭圆位移经橡皮筋压缩——
- * 越拉越费劲，松手后弹回原位。
- *
- * 拖动时的页面跟随：
- * 通过 scrollToPage(page, fraction) 传入**小数偏移**，
- * 让内容页随椭圆连续移动，而不是按整页瞬间跳转。
- */
-@Composable
-fun FloatingNavBar(
-    items: List<Pair<String, androidx.compose.ui.graphics.vector.ImageVector>>,
-    selected: Int,
-    onSelect: (Int) -> Unit,
-    onScrub: (page: Int, fraction: Float) -> Unit,
-    onScrubEnd: (page: Int) -> Unit,
-    showGlow: Boolean = true,
-    glowFactor: Float = 1f
-) {
-    val density = androidx.compose.ui.platform.LocalDensity.current
-    val haptic = LocalHapticFeedback.current
-
-    var scrubbing by remember { mutableStateOf(false) }
-    var scrubIndex by remember { mutableIntStateOf(selected) }
-    var glowIndex by remember { mutableStateOf<Int?>(null) }
-
-    val currentSelected by rememberUpdatedState(selected)
-    val currentOnSelect by rememberUpdatedState(onSelect)
-    val currentOnScrub by rememberUpdatedState(onScrub)
-    val currentOnScrubEnd by rememberUpdatedState(onScrubEnd)
-
-    val highlightScale by animateFloatAsState(
-        targetValue = if (scrubbing) HIGHLIGHT_LIFT_SCALE else 1f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessMedium
-        ),
-        label = "highlightScale"
-    )
-
-    // 用 State 对象而非 by 委托：需要下传给 NavItem（把重组作用域
-    // 从整条导航栏收缩到 4 个小项），也要在 drawBehind 绘制阶段读取
-    // （绘制阶段读 State 只触发重绘、不触发重组）
-    val glowStrengthState = animateFloatAsState(
-        targetValue = if (showGlow && glowIndex != null) 1f else 0f,
-        animationSpec = tween(durationMillis = 220),
-        label = "glowStrength"
-    )
-
-    BoxWithConstraints(
-        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)
-    ) {
-        val rowPad = 8.dp
-        val slotW = ((maxWidth - rowPad * 2) / items.size).coerceAtLeast(1.dp)
-        fun centerX(i: Int) = rowPad + slotW * i + slotW / 2
-
-        val activeIndex = if (scrubbing) scrubIndex else selected
-        val accent = MaterialTheme.colorScheme.primary
-
-        val slotPx = with(density) { slotW.toPx() }
-        val rowPadPx = with(density) { rowPad.toPx() }
-        val pillWPx = with(density) { HIGHLIGHT_W.toPx() }
-        val pillHPx = with(density) { HIGHLIGHT_H.toPx() }
-        val tolPx = with(density) { 14.dp.toPx() }
-
-        fun pillTargetPx(i: Int) = with(density) { (centerX(i) - HIGHLIGHT_W / 2).toPx() }
-        fun slotAt(x: Float): Int =
-            ((x - rowPadPx) / slotPx).toInt().coerceIn(0, items.size - 1)
-
-        // 由椭圆位置换算出的**连续页位置**（小数），用于驱动页面跟随。
-        // 声明为函数类型的 val（而非局部 fun）——函数名不能直接作为值
-        // 传给 NavItem 的参数，lambda 可以
-        val pagePosOf: (Float) -> Float = { pill ->
-            (pill + pillWPx / 2f - rowPadPx - slotPx / 2f) / slotPx
-        }
-
-        val scope = rememberCoroutineScope()
-        // 药丸位置用 State 对象持有（而非 by 委托）：
-        // 绘制层（drawBehind / graphicsLayer 的 lambda）直接读 .value，
-        // 值变化只触发重绘、不触发重组——拖动时每帧零重组开销。
-        // （by 委托的读取若发生在组合作用域内会触发重组）
-        val pillXState = remember { mutableFloatStateOf(0f) }
-        // 导航栏跟随位移：椭圆越界时整条导航栏小幅跟动，形成"整体被拉动"的层次
-        // 椭圆的垂直弹性位移（上下拖动时的 Q 弹，松手弹回）。
-        // 注意：Q 弹作用在椭圆自身，导航栏保持不动。
-        val pillYState = remember { mutableFloatStateOf(0f) }
-        var pillYJob by remember { mutableStateOf<Job?>(null) }
-        var settleJob by remember { mutableStateOf<Job?>(null) }
-        var firstLayout by remember { mutableStateOf(true) }
-
-        // —— 药丸的「拖动激活度」（上游 AnimatedGlassIndicator 的 thickness）——
-        // 静止 = 纯色药丸（样本 0x59FFFFFF）；拖动中淡出为 AGSL 真玻璃
-        // （纯光学透镜：厚度 20 / IOR 1.10 / 无色散 / 光强 2.0）。
-        val pillActivation by animateFloatAsState(
-            targetValue = if (scrubbing) 1f else 0f,
-            animationSpec = spring(
-                dampingRatio = Spring.DampingRatioNoBouncy,
-                stiffness = Spring.StiffnessMedium
-            ),
-            label = "pillActivation"
-        )
-        // 触点（药丸本地坐标）：驱动 shader 的触点高光；松手淡出
-        var pillTouch by remember { mutableStateOf(Offset.Zero) }
-        var pillTouching by remember { mutableStateOf(false) }
-        val pillTouchI by animateFloatAsState(
-            targetValue = if (pillTouching) 1f else 0f,
-            animationSpec = tween(durationMillis = 150),
-            label = "pillTouchI"
-        )
-
-        fun animatePillTo(target: Float) {
-            settleJob?.cancel()
-            settleJob = scope.launch {
-                animate(
-                    initialValue = pillXState.value,
-                    targetValue = target,
-                    animationSpec = spring(
-                        // 带回弹的阻尼：松手落地时有一点 Q 弹
-                        dampingRatio = Spring.DampingRatioLowBouncy,
-                        stiffness = Spring.StiffnessMedium
-                    )
-                ) { v, _ -> pillXState.value = v }
-            }
-        }
-
-        fun animatePillYTo(target: Float) {
-            pillYJob?.cancel()
-            pillYJob = scope.launch {
-                animate(
-                    initialValue = pillYState.value,
-                    targetValue = target,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioLowBouncy,
-                        stiffness = Spring.StiffnessMedium
-                    )
-                ) { v, _ -> pillYState.value = v }
-            }
-        }
-
-        // pillWPx 随密度变化，纳入 key 可在尺寸变化时重新校准椭圆位置
-        LaunchedEffect(activeIndex, maxWidth, pillWPx) {
-            if (scrubbing) return@LaunchedEffect
-            val target = pillTargetPx(activeIndex)
-            if (firstLayout) {
-                pillXState.value = target
-                firstLayout = false
-            } else {
-                animatePillTo(target)
-            }
-        }
-
-        val scheme = MaterialTheme.colorScheme
-        val glassDark = scheme.surface.luminance() < 0.5f
-        // 墙光颜色：深色主题光偏白提亮（深底上更醒目）；
-        // 浅色主题用强调色（浅底上偏白的光几乎看不出，
-        // 用强调色才能形成明显的彩色光带）
-        val wallLight = if (glassDark) {
-            androidx.compose.ui.graphics.lerp(accent, Color.White, 0.30f)
-        } else {
-            androidx.compose.ui.graphics.lerp(accent, Color.Black, 0.10f)
-        }
-        // ① 玻璃胶囊本体：AGSL 液态玻璃 1:1 移植（上游 premium 渲染管线：
-        //   Snell 折射 + RGB 色散 + iOS 26 保明度染色 + 亮度自适应饱和 +
-        //   白化面纱 + meniscus 暗环 + 方向性边缘光 + Fresnel/rim light）。
-        //   每个玻璃层持有**独立** RuntimeShader 实例（uniform 在绘制时求值，
-        //   共享实例会导致同帧多个玻璃层互相覆盖 uniform）。
-        //   renderEffect 作用于整个 RenderNode 内容 → 玻璃底层必须与
-        //   内容层分离（双层 Box），否则图标/文字会被 shader 输出整体替换。
-        val capsuleNode = rememberGlassNode()
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(percent = 50))
-        ) {
-            // ①a 玻璃底层（无子内容——内容层见下方 ①c）
-            Box(
-                Modifier
-                    .matchParentSize()
-                    .liquidGlass(
-                        glassNode = capsuleNode,
-                        // 999dp：shader 内部把圆角钳制到半高 → 胶囊形
-                        cornerRadius = 999.dp,
-                        spec = if (glassDark) GlassSpec.dark() else GlassSpec.light(),
-                        backdropColor = scheme.surface
-                    )
-            )
-            // ①b 墙光蒙层：应用自有的「沉浸光晕」设置项（非上游构成），
-            //     叠在真玻璃之上——把导航栏当作一面真实的墙，光源处最亮，
-            //     亮度沿水平方向向左右两侧扩散衰减（而非均匀发光）
-            Box(
-                Modifier
-                    .matchParentSize()
-                    .drawBehind {
-                        val gs = glowStrengthState.value *
-                            (if (glassDark) 0.30f else 0.42f) * glowFactor
-                        if (gs > 0.001f) {
-                            drawRect(
-                                wallLightBrush(
-                                    surface = Color.Transparent,
-                                    light = wallLight,
-                                    centerFrac = (pillXState.value + pillWPx / 2f) /
-                                        size.width.coerceAtLeast(1f),
-                                    strength = gs
-                                )
-                            )
-                        }
-                    }
-            )
-            // ①c 内容层：光源位置与受光量的计算下沉到 NavItem 内部
-            //     （读 State 对象）——拖动时只有 4 个小项各自重组，父层零重组
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = rowPad, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                items.forEachIndexed { idx, item ->
-                    NavItem(
-                        label = item.first,
-                        icon = item.second,
-                        active = idx == activeIndex,
-                        accent = accent,
-                        index = idx,
-                        pillXState = pillXState,
-                        glowStrengthState = glowStrengthState,
-                        pagePosOf = pagePosOf,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
-        }
-
-        // ② 单一指针层（静止，坐标稳定；点击 + 长按拖动统一在此处理）
-        val baseViewConfig = androidx.compose.ui.platform.LocalViewConfiguration.current
-        val shortViewConfig = remember(baseViewConfig) {
-            ShortLongPressViewConfiguration(baseViewConfig)
-        }
-        androidx.compose.runtime.CompositionLocalProvider(
-            androidx.compose.ui.platform.LocalViewConfiguration provides shortViewConfig
-        ) {
-            Box(
-                Modifier
-                    .matchParentSize()
-                    .pointerInput(items.size) {
-                        awaitEachGesture {
-                            val down = awaitFirstDown(requireUnconsumed = false)
-                            val left = pillTargetPx(currentSelected)
-                            // 命中判定必须同时约束纵向：椭圆垂直居中，
-                            // 只判断横向的话，按在导航栏上下边缘（同一列）
-                            // 也会被当作按在椭圆上，从而"平时也能上下拖"。
-                            val pillTop = (size.height - pillHPx) / 2f
-                            val inEllipse = down.position.x >= left - tolPx &&
-                                down.position.x <= left + pillWPx + tolPx &&
-                                down.position.y >= pillTop - tolPx &&
-                                down.position.y <= pillTop + pillHPx + tolPx
-
-                            if (inEllipse) {
-                                if (showGlow) glowIndex = currentSelected
-
-                                val lp = awaitLongPressOrCancellation(down.id)
-                                if (lp == null) {
-                                    glowIndex = null
-                                    currentOnSelect(slotAt(down.position.x))
-                                    return@awaitEachGesture
-                                }
-
-                                // —— 进入拖动 ——
-                                scrubIndex = currentSelected
-                                scrubbing = true
-                                settleJob?.cancel()
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                // 触点（换算进药丸本地坐标）：驱动玻璃的触点高光。
-                                // 指针层与药丸同在导航栏 Box 内，药丸布局原点为
-                                // (0, 胶囊高度中心)，再叠加 pillX/pillY 位移
-                                pillTouch = Offset(
-                                    lp.position.x - pillXState.value,
-                                    lp.position.y - pillTop - pillYState.value
-                                )
-                                pillTouching = true
-
-                                val startPill = pillXState.value
-                                val startX = lp.position.x
-                                val startY = lp.position.y
-                                // 垂直方向的橡皮筋行程（约半个按钮高度），限制上下位移幅度
-                                val vertRange = with(density) { HIGHLIGHT_H.toPx() } * 0.35f
-                                // 向上比向下更收敛（约一半）
-                                val upRange = vertRange * 0.45f
-                                val minX = pillTargetPx(0)
-                                val maxX = pillTargetPx(items.size - 1)
-                                // 橡皮筋的参考行程：越大越"软"。
-                                // 用 0.4 格，限制椭圆移出导航栏的幅度。
-                                val dragRange = slotPx * 0.4f
-
-                                drag(down.id) { ch ->
-                                    ch.consume()
-                                    // 触点跟随手指（药丸本地坐标）
-                                    pillTouch = Offset(
-                                        ch.position.x - pillXState.value,
-                                        ch.position.y - pillTop - pillYState.value
-                                    )
-                                    val raw = startPill + (ch.position.x - startX)
-                                    // Q弹：到达两端后继续拖动时，用橡皮筋阻尼越界——
-                                    // 越往外拉越"费劲"（位移被压缩），松手后弹回。
-                                    // 之前是直接 coerceIn 硬停，所以到边上就断掉没有手感。
-                                    val nx = when {
-                                        raw < minX -> minX - rubberBand(minX - raw, dragRange)
-                                        raw > maxX -> maxX + rubberBand(raw - maxX, dragRange)
-                                        else -> raw
-                                    }
-                                    // 导航栏跟随：只取椭圆实际越界量的一小部分，
-                                    // 幅度明显小于椭圆，形成层次感
-                                    // 上下滑动同样带 Q 弹：作用在**椭圆自身**，
-                                    // 越拉越费劲，松手弹回，导航栏保持不动
-                                    val dy = ch.position.y - startY
-                                    pillYState.value = rubberBandSigned(
-                                        dy, if (dy < 0f) upRange else vertRange
-                                    )
-                                    pillXState.value = nx
-
-                                    // 连续页位置 → 拆成整页 + 小数偏移，
-                                    // 让内容页随椭圆平滑移动（这才是"动画"）
-                                    val pageF = pagePosOf(nx)
-                                    val base = kotlin.math.floor(pageF).toInt()
-                                    val frac = pageF - base
-                                    val (pp, ff) = if (frac > 0.5f) {
-                                        (base + 1) to (frac - 1f)
-                                    } else {
-                                        base to frac
-                                    }
-                                    val clampedPage = pp.coerceIn(0, items.size - 1)
-                                    if (clampedPage != scrubIndex) {
-                                        scrubIndex = clampedPage
-                                    }
-                                    currentOnScrub(clampedPage, ff)
-                                }
-
-                                scrubbing = false
-                                glowIndex = null
-                                // 触点高光淡出（玻璃本身随激活度回退）
-                                pillTouching = false
-                                // 松手：椭圆垂直回位、水平落到目标项，页面同步吸附
-                                animatePillYTo(0f)
-                                currentOnScrubEnd(scrubIndex)
-                                animatePillTo(pillTargetPx(scrubIndex))
-                            } else {
-                                // 普通点击
-                                var tapped = false
-                                while (true) {
-                                    val ev = awaitPointerEvent()
-                                    val ch2 = ev.changes.firstOrNull { it.id == down.id } ?: break
-                                    if (!ch2.pressed) { tapped = true; break }
-                                    val dx = ch2.position.x - down.position.x
-                                    val dy = ch2.position.y - down.position.y
-                                    if (dx * dx + dy * dy >
-                                        viewConfiguration.touchSlop * viewConfiguration.touchSlop
-                                    ) break
-                                }
-                                glowIndex = null
-                                if (tapped) currentOnSelect(slotAt(down.position.x))
-                            }
-                        }
-                    }
-            )
-        }
-
-        // ③ 高光药丸（双指示器，1:1 上游 AnimatedGlassIndicator）：
-        //    a. 纯色药丸（样本 0x59FFFFFF）：静止态，随激活度前 15% 淡出
-        //    b. AGSL 真玻璃：拖动态淡入——纯光学透镜（厚度 20 / IOR 1.10 /
-        //       无色散 / 光强 2.0）+ concave pinch（L4 squircle 透镜）+
-        //       触点高光。独立 RuntimeShader 实例（与胶囊互不覆盖 uniform）。
-        //    位移与缩放全部下沉到 graphicsLayer（图层阶段执行，不触发布局、
-        //    不触发重组）；不再绘制向外散发的独立光圈——光照效果由导航栏
-        //    「墙面」与被照亮元素本身呈现（见 wallLightBrush 与 NavItem）。
-        val pillNode = rememberGlassNode()
-        // pinch 用「稳定化」的激活度：上游 1-(1-f)² 把弹簧在 1.0 附近的
-        // 微振荡压缩 ~10 倍，避免图标透过透镜抖动
-        val pillFade = pillActivation.coerceIn(0f, 1f)
-        val pillPinch = 1f - (1f - pillFade) * (1f - pillFade)
-        Box(
-            Modifier
-                .align(Alignment.CenterStart)
-                .size(HIGHLIGHT_W, HIGHLIGHT_H)
-                .graphicsLayer {
-                    // 位移与缩放都在图层阶段完成：每帧只重绘，不重组、不重新布局
-                    // （此前用 .offset()，属于布局阶段读状态，每帧触发重组+重排）
-                    translationX = pillXState.value
-                    translationY = pillYState.value
-                    scaleX = highlightScale
-                    scaleY = highlightScale
-                }
-                .clip(RoundedCornerShape(percent = 50))
-        ) {
-            // a. 纯色药丸（静止态）
-            if (pillFade < 0.999f) {
-                Box(
-                    Modifier
-                        .matchParentSize()
-                        .graphicsLayer {
-                            // 上游 backgroundOpacity = (1 - thickness/0.15).clamp(0,1)
-                            alpha = (1f - pillFade / 0.15f).coerceIn(0f, 1f)
-                        }
-                        .background(PILL_REST_COLOR)
-                )
-            }
-            // b. 玻璃药丸（拖动态）：visibility = 激活度
-            if (pillFade > 0.001f) {
-                Box(
-                    Modifier
-                        .matchParentSize()
-                        .graphicsLayer { alpha = pillFade }
-                        .liquidGlass(
-                            glassNode = pillNode,
-                            // 药丸高 48dp → 圆角钳制到 24dp（半高胶囊）
-                            cornerRadius = HIGHLIGHT_H / 2,
-                            spec = GlassSpec.pill(),
-                            backdropColor = scheme.surface,
-                            touchPosition = { pillTouch },
-                            touchIntensity = { pillTouchI },
-                            pinchStrength = { pillPinch }
-                        )
-                )
-            }
-        }
-    }
-}
-
-/** 药丸纯色态（样本 indicatorColor：白 0x59 = 35%） */
-private val PILL_REST_COLOR = Color(0x59FFFFFF)
-
-/** 长按时椭圆放大的倍数 */
-/**
- * 长按拖动时椭圆放大的倍数（1.0 = 原大小）。
- * 用户要求在原 1.25 基础上「变大一点点」→ 1.35。
- */
-private const val HIGHLIGHT_LIFT_SCALE = 1.35f
-
-/** 选中态高光椭圆的尺寸：四个位置统一 */
-private val HIGHLIGHT_W = 66.dp
-private val HIGHLIGHT_H = 48.dp
-
-/**
- * 缩短长按阈值的 ViewConfiguration：系统默认约 500ms，对「长按拖动」偏高，
- * 这里压到 250ms。其余参数沿用系统值。
- */
-private class ShortLongPressViewConfiguration(
-    private val base: androidx.compose.ui.platform.ViewConfiguration
-) : androidx.compose.ui.platform.ViewConfiguration by base {
-    override val longPressTimeoutMillis: Long get() = 250L
-}
-
-
-/**
- * 导航项。
- *
- * 受光计算内聚在本项内：直接读 pillXState / glowStrengthState，
- * 拖动时只有本项重组，不牵连父层导航栏（重组作用域隔离）。
- *
- * 两步着色：
- * - 长按期间整体转入「高对比中间态」（见下方 ambient 逻辑）
- * - 被光照射到的位置，再从中间态变为**光的颜色**（强调色）
- * 这是"被光照射"的效果——元素本身不发光，只是被照亮、被染色。
- */
-@Composable
-private fun NavItem(
-    label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    active: Boolean,
-    accent: Color,
-    /** 本项在导航栏中的索引（用于计算与光源的距离） */
-    index: Int,
-    /** 药丸（光源）横向位置的 State 对象：组合阶段读 .value，
-     *  状态变化只重组本项、只重绘胶囊与椭圆 */
-    pillXState: State<Float>,
-    /** 光照强度 0..1 的 State 对象（动画值，长按亮起） */
-    glowStrengthState: State<Float>,
-    /** 由药丸位置换算连续页位置的函数（纯计算，捕获密度相关常量） */
-    pagePosOf: (Float) -> Float,
-    modifier: Modifier = Modifier
-) {
-    // 当前光源位置（连续，用于计算每个项目接收到多少光）
-    val lightCenter = pagePosOf(pillXState.value)
-    // 受光量做平滑过渡，避免跟随手指时颜色跳动。
-    // 只照亮相邻项：距离 0 → 1.0，1 → 0.5，2 及更远 → 0
-    val light by animateFloatAsState(
-        targetValue = (((2f - kotlin.math.abs(index - lightCenter)) / 2f)
-            .coerceIn(0f, 1f)) * glowStrengthState.value,
-        animationSpec = tween(durationMillis = 90),
-        label = "navLight"
-    )
-    // 长按环境强度：>0 时图标与文字整体转为高对比中间态
-    val amb by animateFloatAsState(
-        targetValue = glowStrengthState.value.coerceIn(0f, 1f),
-        animationSpec = tween(durationMillis = 160),
-        label = "navAmbient"
-    )
-
-    // 平常态：跟随主题（选中用强调色，未选中用中性灰）
-    val normal = if (active) accent else MaterialTheme.colorScheme.onSurfaceVariant
-
-    // 两步着色：
-    // ① 长按期间，四个图标与文字整体转入一个"高对比中间态"
-    // ② 被光照射到的位置，再从该中间态变为**光的颜色**
-    //
-    // 中间态必须按主题自适应：
-    // - 深色主题：转**白色**（深底上白色让光色变化清晰可辨）
-    // - 浅色主题：转**深色**——若同样转白，白图标落在浅色导航栏上
-    //   会直接看不见，表现为"长按后只有被光照到的才显示"
-    val darkTheme = MaterialTheme.colorScheme.surface.luminance() < 0.5f
-    val ambientTarget = if (darkTheme) {
-        Color.White
-    } else {
-        androidx.compose.ui.graphics.lerp(
-            MaterialTheme.colorScheme.onSurface, Color.Black, 0.25f
-        )
-    }
-    val ambientColor = androidx.compose.ui.graphics.lerp(
-        normal, ambientTarget, amb
-    )
-    // 染色过渡曲线：tint = 1-(1-l)²，与 pow(l, 0.55) 效果接近，
-    // 让光色更早、更深地显现（纯算术实现，不依赖 math.pow）
-    val l = light.coerceIn(0f, 1f)
-    val tint = 1f - (1f - l) * (1f - l)
-    val litColor = androidx.compose.ui.graphics.lerp(
-        ambientColor,
-        accent,
-        tint
-    )
-
-    Box(modifier, contentAlignment = Alignment.Center) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-            modifier = Modifier.size(HIGHLIGHT_W, HIGHLIGHT_H)
-        ) {
-            Icon(
-                icon, label,
-                tint = litColor,
-                modifier = Modifier.size(24.dp)
-            )
-            Text(
-                label,
-                fontSize = 11.sp,
-                color = litColor,
-                fontWeight = if (active || light > 0.35f) FontWeight.Bold else FontWeight.Normal
-            )
-        }
     }
 }
 

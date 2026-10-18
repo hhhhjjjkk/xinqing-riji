@@ -30,12 +30,22 @@ val hasReleaseSigning = listOf(releaseStoreFile, releaseStorePassword, releaseKe
 android {
     namespace = "com.mooddiary.app"
     compileSdk = 34
+    // 显式指定 NDK 版本：Flutter 引擎 so（libflutter.so ~170MB 未 strip）
+    // 需要 NDK 的 llvm-strip；不指定时 AGP 只找自己默认版本，
+    // 未命中就放弃 strip（日志 "Unable to strip..."），包体积暴涨。
+    // strip 后 arm64 libflutter.so 约 20MB。
+    ndkVersion = "28.2.13676358"
     defaultConfig {
         applicationId = "com.mooddiary.app"
         minSdk = 24
         targetSdk = 34
         versionCode = 83
         versionName = "4.11.0"
+        // 只打包 ARM 两种 ABI：用户设备全为 ARM；x86/x86_64 仅模拟器需要，
+        // 排除后省去两个 Flutter 引擎 so（每个数百 MB，是大头）。
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
     signingConfigs {
         if (hasReleaseSigning) {
@@ -75,6 +85,17 @@ android {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
         }
+        // profile 变体：导航栏 Flutter 模块映射到 profile engine
+        // （Flutter 插件按 buildType 名映射：profile → 优化编译引擎，
+        // 体积约为 debug engine 的 1/6）。用于分发安装——
+        // assembleProfile 产出的 APK 与正式版签名无关、并行安装。
+        create("profile") {
+            initWith(getByName("debug"))
+            // 显式关闭 debuggable：profile 引擎不保证断点调试语义，
+            // 避免误以为可调试（需要断点调试时用 assembleDebug）。
+            isDebuggable = false
+            versionNameSuffix = "-profile"
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -113,4 +134,7 @@ dependencies {
     // 单元测试：数据层用内存实现，纯 JVM 运行，无需真机或 Android 运行时
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+
+    // 导航栏 Flutter 模块（混编）：FlutterActivity/FlutterEngine 等嵌入类由 :flutter 传递提供
+    implementation(project(":flutter"))
 }

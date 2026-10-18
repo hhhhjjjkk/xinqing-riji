@@ -9,6 +9,13 @@ local.properties
 android-sdk/
 gradle-home/
 
+# Flutter 模块：构建缓存与本地配置
+flutter_module/.dart_tool/
+flutter_module/.android/.gradle/
+flutter_module/.android/local.properties
+flutter_module/.idea/
+flutter_module/pubspec.lock.bak
+
 # 签名凭据与私钥：绝不入库
 keystore.properties
 *.keystore
