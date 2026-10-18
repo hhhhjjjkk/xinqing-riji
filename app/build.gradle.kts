@@ -68,6 +68,13 @@ android {
                 logger.warn("警告：未找到 keystore.properties 或 MOODDIARY_* 环境变量，release 产物将不签名。")
             }
         }
+        debug {
+            // 与正式版（com.mooddiary.app）并行安装、数据隔离：
+            // 尝鲜新版液态玻璃时不必卸载正式版，两边互不覆盖、
+            // 各自保存各自的日记数据（Room 数据库按 applicationId 分目录）。
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
