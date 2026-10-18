@@ -1,0 +1,36 @@
+name: mood_diary
+description: "心情日记 — 按小时记录心情，液态玻璃导航栏（纯 Flutter 版）"
+publish_to: "none"
+version: 5.0.0+50
+
+environment:
+  sdk: ^3.13.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  # 状态管理
+  provider: ^6.1.2
+  # 数据库：沿用原 Room 的 mood_diary.db / mood_entries 表结构，老数据无缝继承
+  sqflite: ^2.3.3
+  path: ^1.9.0
+  # 设置存储
+  shared_preferences: ^2.3.2
+  # 整点提醒
+  flutter_local_notifications: ^18.0.1
+  timezone: ^0.10.0
+  # Android 12+ 动态取色
+  dynamic_color: ^1.7.0
+  # 液态玻璃导航栏（上游 sample 同款渲染管线）
+  liquid_glass_widgets: ^1.13.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
