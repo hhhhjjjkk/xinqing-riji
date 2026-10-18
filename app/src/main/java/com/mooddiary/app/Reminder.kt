@@ -143,6 +143,12 @@ object Reminder {
 
     
     /**
+     * 跳转结果，供界面区分「已打开厂商自启动页」「已打开应用详情页」和「完全失败」，
+     * 从而在失败时给出可照着做的手动路径，而不是点了没反应。
+     */
+    enum class AutoStartResult { VENDOR_PAGE, APP_DETAIL, FAILED }
+
+    /**
      * 跳转到「自启动 / 后台运行」管理页。
      *
      * 说明：Android 标准并没有「自启动权限」这种可声明的权限，
@@ -151,50 +157,99 @@ object Reminder {
      * 已注册的全部闹钟并禁止其自启动——此时任何纯应用层的努力都无法
      * 唤醒进程，必须由用户在系统设置中放行。
      *
-     * 因此这里按厂商逐个尝试直达其自启动管理页，全部失败则退回
-     * 应用详情页（用户可在其中找到相关开关）。
+     * 两个历史坑：
+     * 1. 只在 AndroidManifest 里声明 RECEIVE_BOOT_COMPLETED 是不够的——
+     *    厂商自启动列表只收录声明了自家私有权限的应用，未声明的会显示为
+     *    灰色不可点。现已在清单中补齐（见 AndroidManifest.xml）。
+     * 2. 厂商 Activity 名会随 ROM 版本变化，且部分 ROM 该页需要特定权限才可打开，
+     *    因此这里逐个候选尝试，并用 resolveActivity 先确认可达，
+     *    全部失败才退回应用详情页，并把结果返回给调用方展示引导文案。
      */
-    fun openAutoStartSettings(context: Context) {
+    fun openAutoStartSettings(context: Context): AutoStartResult {
         val pkg = context.packageName
-        // 各厂商的自启动管理页（按常见程度排序）
+        // 各厂商的自启动管理页（按常见程度排序，一个厂商给多个候选）
         val candidates = listOf(
             // 小米 / Redmi
             "com.miui.securitycenter" to "com.miui.permcenter.autostart.AutoStartManagementActivity",
+            "com.miui.securitycenter" to "com.miui.powercenter.PowerSettings",
             // 华为 / 荣耀
             "com.huawei.systemmanager" to "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity",
             "com.huawei.systemmanager" to "com.huawei.systemmanager.optimize.process.ProtectActivity",
+            "com.huawei.systemmanager" to "com.huawei.systemmanager.appcontrol.activity.StartupAppControlActivity",
             // OPPO / 一加 / realme
             "com.coloros.safecenter" to "com.coloros.safecenter.permission.startup.StartupAppListActivity",
             "com.coloros.safecenter" to "com.coloros.safecenter.startupapp.StartupAppListActivity",
             "com.oppo.safe" to "com.oppo.safe.permission.startup.StartupAppListActivity",
+            "com.oneplus.security" to "com.oneplus.security.chainlaunch.view.ChainLaunchAppListActivity",
             // vivo / iQOO
             "com.vivo.permissionmanager" to "com.vivo.permissionmanager.activity.BgStartUpManagerActivity",
             "com.iqoo.secure" to "com.iqoo.secure.ui.phoneoptimize.AddWhiteListActivity",
+            "com.iqoo.secure" to "com.iqoo.secure.ui.phoneoptimize.BgStartUpManager",
             // 三星
             "com.samsung.android.lool" to "com.samsung.android.sm.ui.battery.BatteryActivity",
-            // 联想 / 其他
-            "com.lenovo.security" to "com.lenovo.security.purebackground.PureBackgroundActivity"
+            "com.samsung.android.sm" to "com.samsung.android.sm.ui.battery.BatteryActivity",
+            // 联想 / 魅族 / 中兴等
+            "com.lenovo.security" to "com.lenovo.security.purebackground.PureBackgroundActivity",
+            "com.meizu.safe" to "com.meizu.safe.security.SHOW_APPSEC",
+            "com.zte.heartyservice" to "com.zte.heartyservice.setting.ClearMemoryActivity"
         )
         for ((p, cls) in candidates) {
+            val intent = Intent().apply {
+                setClassName(p, cls)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            // 先确认目标页在本机真实存在，且本应用被允许显式启动它，
+            // 避免 setClassName 成功、startActivity 抛 SecurityException 的假成功。
+            val resolvable = runCatching {
+                context.packageManager.resolveActivity(intent, 0) != null
+            }.getOrDefault(false)
+            if (!resolvable) continue
             val ok = runCatching {
-                context.startActivity(
-                    android.content.Intent().apply {
-                        setClassName(p, cls)
-                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                )
+                context.startActivity(intent)
                 true
             }.getOrDefault(false)
-            if (ok) return
+            if (ok) return AutoStartResult.VENDOR_PAGE
         }
-        // 全部失败：退回应用详情页（部分 ROM 的开关就在此处）
-        runCatching {
+
+        // 厂商页都不可达：退回应用详情页（部分 ROM 的自启动开关就在此处）
+        val detail = runCatching {
             context.startActivity(
-                android.content.Intent(
-                    android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS
-                ).setData(android.net.Uri.parse("package:$pkg"))
-                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    .setData(Uri.parse("package:$pkg"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
+            true
+        }.getOrDefault(false)
+        return if (detail) AutoStartResult.APP_DETAIL else AutoStartResult.FAILED
+    }
+
+    /**
+     * 当前 ROM 的自启动设置手动路径文案（厂商页打不开时展示给用户照着点）。
+     * 依据 Build.MANUFACTURER 判断，认不出时给通用描述。
+     */
+    fun autoStartManualHint(): String {
+        val brand = (Build.MANUFACTURER + " " + Build.BRAND).lowercase(Locale.ROOT)
+        return when {
+            brand.contains("xiaomi") || brand.contains("redmi") || brand.contains("poco") ->
+                "小米/Redmi：设置 → 应用设置 → 应用管理 → 心情日记 → 自启动（打开），" +
+                    "并把「省电策略」改为「无限制」"
+            brand.contains("huawei") || brand.contains("honor") ->
+                "华为/荣耀：设置 → 应用 → 应用启动管理 → 心情日记 → 关闭「自动管理」，" +
+                    "然后手动打开「自启动」「关联启动」「后台活动」三项"
+            brand.contains("oppo") || brand.contains("oneplus") || brand.contains("realme") ->
+                "OPPO/一加/realme：设置 → 电池 → 应用耗电管理 → 心情日记 → " +
+                    "允许「自启动」「后台运行」「关联启动」"
+            brand.contains("vivo") || brand.contains("iqoo") ->
+                "vivo/iQOO：设置 → 电池 → 后台耗电管理 → 心情日记 → 允许后台高耗电；" +
+                    "i管家 → 自启动管理 → 打开心情日记"
+            brand.contains("samsung") ->
+                "三星：设置 → 电池和设备维护 → 电池 → 后台使用限制 → " +
+                    "把心情日记加入「永不休眠的应用」"
+            brand.contains("meizu") ->
+                "魅族：手机管家 → 权限管理 → 后台管理 → 心情日记 → 允许后台运行"
+            else ->
+                "请到系统设置的「应用管理 / 电池」中找到「心情日记」，" +
+                    "允许其自启动与后台运行（不同品牌路径不同）"
         }
     }
 

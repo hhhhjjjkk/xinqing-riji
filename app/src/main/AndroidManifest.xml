@@ -11,6 +11,28 @@
     <!-- 跳转到「忽略电池优化」设置页需要 -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- ============ 自启动 / 后台运行 ============
+         Android 标准里并没有「自启动权限」这个可申请项，它是国内 ROM
+         （小米、华为、OPPO、vivo、三星等）自行加入的管控开关。
+
+         关键点：这些 ROM 的「自启动管理」列表只收录**声明了对应厂商私有权限**
+         的应用；没有声明的应用在列表里会显示为灰色不可点，甚至压根不出现——
+         这正是「跳到设置页却无法开启自启动」的原因。
+
+         下列权限在各厂商 ROM 上按普通权限处理，安装即授予、无需运行时申请；
+         在普通 AOSP / 类原生设备上会被系统直接忽略，不影响安装与运行。 -->
+    <!-- 小米 / Redmi：自启动管理页会检查该权限 -->
+    <uses-permission android:name="miui.permission.USE_INTERNAL_GENERAL_API" />
+    <!-- 华为 / 荣耀：启动管理 / 应用启动记录 -->
+    <uses-permission android:name="com.huawei.permission.external_app_settings.USE_COMPONENT" />
+    <!-- OPPO / 一加 / realme：允许后台运行 -->
+    <uses-permission android:name="com.oppo.launcher.permission.READ_SETTINGS" />
+    <uses-permission android:name="com.oppo.launcher.permission.WRITE_SETTINGS" />
+    <!-- vivo / iQOO：后台高耗电 / 自启动 -->
+    <uses-permission android:name="com.vivo.permission.BACKGROUND_START" />
+    <!-- 三星：应用保持活动 -->
+    <uses-permission android:name="com.samsung.android.permission.KEEP_ALIVE" />
+
     <application
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"

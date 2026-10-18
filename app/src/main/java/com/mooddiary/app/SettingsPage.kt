@@ -70,6 +70,8 @@ fun SettingsPage(
     var clearConfirm by remember { mutableStateOf(false) }
     var moodEditorOpen by remember { mutableStateOf(false) }
     var hourPicker by remember { mutableStateOf<Pair<String, Int>?>(null) }
+    // 自启动跳转结果：null = 还没点过；跳转失败时在页面上展开手动路径指引
+    var autoStartResult by remember { mutableStateOf<Reminder.AutoStartResult?>(null) }
 
     Column(
         Modifier
@@ -334,10 +336,44 @@ fun SettingsPage(
                     )
                     Spacer(Modifier.height(10.dp))
                     OutlinedButton(
-                        onClick = { Reminder.openAutoStartSettings(context) },
+                        onClick = {
+                            autoStartResult = Reminder.openAutoStartSettings(context)
+                        },
                         modifier = Modifier.pressBounce(pressedScale = 0.94f)
                     ) {
                         Text("① 开启「自启动」权限")
+                    }
+                    // 跳转结果反馈：厂商页可达 / 落到应用详情页 / 完全打不开，
+                    // 三种情况给不同提示。之前是静默的，用户点了没反应会以为功能坏了；
+                    // 且部分 ROM 的自启动列表不列出未声明厂商权限的应用（已在本版补齐声明）。
+                    when (autoStartResult) {
+                        Reminder.AutoStartResult.VENDOR_PAGE -> {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                "已进入本机的自启动管理页，请在列表中找到「心情日记」并打开开关" +
+                                    "（若列表里没有本应用，可点下方按钮改用系统应用详情页）。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Reminder.AutoStartResult.APP_DETAIL -> {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                "本机没能直达「自启动管理」页，已改为打开系统应用详情页。\n" +
+                                    "请按此路径手动开启：\n${Reminder.autoStartManualHint()}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                        Reminder.AutoStartResult.FAILED -> {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                "无法自动跳转系统设置，请手动开启：\n${Reminder.autoStartManualHint()}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                        null -> Unit
                     }
                     Spacer(Modifier.height(8.dp))
                     OutlinedButton(
