@@ -537,13 +537,52 @@ fun MoodDiaryTheme(
         }
     }
 
-    // 纯黑背景：深色模式下把 surface/background 压成纯黑（OLED 省电）
+    // 纯黑背景：深色模式下把 surface/background 压成纯黑（OLED 省电）。
+    //
+    // 这里必须**重建整条明度阶梯**，不能只改 surface。
+    // 上一版只改了 background / surface / surfaceVariant / surfaceContainerLow，
+    // 留下两个结构性缺陷，正是「开了纯黑之后文字看不清」的根因：
+    //
+    //   ① surfaceVariant 被改成 #101012，比原来深得多。
+    //      Material3 里 surfaceVariant 的角色是「凹陷面/轨道底色」（开关轨道、
+    //      输入框底色等），本应比 surface *更亮*。压到 #101012 后它与纯黑背景的
+    //      对比只剩 1.10，开关轨道等控件等于消失。
+    //   ② surfaceContainer* 系列没跟着改，仍是深灰 #211F26 左右，
+    //      而 surface 变成纯黑，导致「容器比背景亮一截」的突兀色块，
+    //      玻璃面板的渐变底与页面背景失去层次关系。
+    //
+    // 另外纯黑底色下，白色文字会因 OLED 高对比产生光晕（halation），
+    // 长时间阅读反而更累。因此把 onSurface 系列略微下调到非纯白，
+    // 既保留远超 WCAG AA 的对比度，又降低刺眼感。
     val finalScheme = if (pureBlack && dark) {
         colorScheme.copy(
             background = Color.Black,
             surface = Color.Black,
-            surfaceVariant = Color(0xFF101012),
-            surfaceContainerLow = Color(0xFF0A0A0C)
+            // —— 明度阶梯：从纯黑单调递增，保证每个层级都能与背景区分 ——
+            surfaceDim = Color(0xFF0A0A0C),
+            surfaceBright = Color(0xFF2A2930),
+            surfaceContainerLowest = Color(0xFF000000),
+            surfaceContainerLow = Color(0xFF0E0E11),
+            surfaceContainer = Color(0xFF16151A),
+            surfaceContainerHigh = Color(0xFF1E1D23),
+            surfaceContainerHighest = Color(0xFF26252C),
+            // 凹陷面（开关轨道、输入框底、日历空档）：必须比容器更亮才看得见。
+            // 注意这里**不能**跟着 surface 一起压暗：Material3 里 surfaceVariant
+            // 扮演的是「凹陷面」角色，本应比面层更亮。上一版压到 #101012，
+            // 与纯黑背景对比仅 1.10，开关轨道直接消失。
+            // 取值贴近 M3 深色默认 #49454F，相对面板底对比 ≈1.78，
+            // 与常规深色模式的观感保持一致。
+            surfaceVariant = Color(0xFF4A4A52),
+            surfaceTint = colorScheme.primary,
+            // 文字：略微柔化，避免纯白配纯黑的刺眼，同时远高于 AA 标准
+            onBackground = Color(0xFFECEAEF),
+            onSurface = Color(0xFFECEAEF),
+            onSurfaceVariant = Color(0xFFCFC9D6),
+            // 分隔线 / 描边：纯黑下原来几乎不可见，提亮到能辨认
+            outline = Color(0xFF8A8590),
+            outlineVariant = Color(0xFF3A3740),
+            inverseSurface = Color(0xFFE6E1E5),
+            inverseOnSurface = Color(0xFF1C1B1F)
         )
     } else colorScheme
 
@@ -560,7 +599,24 @@ fun MoodDiaryTheme(
     }
 
     CompositionLocalProvider(LocalDensity provides scaledDensity) {
-        MaterialTheme(colorScheme = finalScheme, content = content)
+        MaterialTheme(colorScheme = finalScheme) {
+            // 显式提供默认文字颜色。
+            //
+            // 本应用的 Scaffold 用了 containerColor = Color.Transparent（为了让底层
+            // 那条整屏渐变透出来）。而 Material3 里 Scaffold 的 contentColor 默认是
+            // contentColorFor(containerColor)：碰到 Transparent 会返回 Unspecified，
+            // 再 takeOrElse 回落到 LocalContentColor.current —— 它由 Material3 定义、
+            // 默认值是**纯黑**。
+            // 于是所有没有显式写 color 的 Text（开关行标题、心情标签名、设置项名称等）
+            // 都按纯黑绘制。深色主题下本就偏暗，纯黑底上则彻底看不见。
+            // 在这里给 LocalContentColor 一个正确的值，所有子级默认文字色就都对了，
+            // 不必在几十处 Text 上逐个补 color。
+            androidx.compose.runtime.CompositionLocalProvider(
+                LocalContentColor provides finalScheme.onBackground
+            ) {
+                content()
+            }
+        }
     }
 }
 
@@ -629,8 +685,18 @@ fun MoodDiaryApp(
     // 渐变在约 40% 处就已回到纯 surface，所以底部导航条所在区域与
     // 原来完全一致，导航条观感不受影响。
     val bgSurface = MaterialTheme.colorScheme.surface
+    // 纯黑模式：surface 已是纯黑，顶部别再压太多强调色，
+    // 否则在 OLED 上会变成一条明显的棕/蓝色雾，反而让下面的玻璃面板糊在一起。
+    // 降低染色后页顶更接近纯黑，面板（以 surfaceContainer 为基底）就能清晰浮起。
+    val isPureBlackBg = bgSurface.luminance() < 0.005f
     val bgTop = MaterialTheme.colorScheme.primary
-        .copy(alpha = if (bgSurface.luminance() < 0.5f) 0.14f else 0.09f)
+        .copy(
+            alpha = when {
+                isPureBlackBg -> 0.07f
+                bgSurface.luminance() < 0.5f -> 0.14f
+                else -> 0.09f
+            }
+        )
         .compositeOver(bgSurface)
     Box(
         Modifier

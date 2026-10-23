@@ -678,15 +678,24 @@ fun GlassPanel(
     val scheme = MaterialTheme.colorScheme
     val dark = scheme.surface.luminance() < 0.5f
     val accent = scheme.primary
+    // 纯黑模式判定：surface 几乎无亮度时，页面背景是纯黑，面板必须靠自身
+    // 的明度台阶而不是「比背景深色一点」来区分，否则会和背景糊成一片。
+    val pureBlack = dark && scheme.surface.luminance() < 0.005f
+
+    // 玻璃基底。
+    // 深色下不能用 surface（纯黑模式下是 #000000）当基底——强调色 16% 叠在纯黑上
+    // 只比页面渐变亮 1.05 倍，肉眼分不出面板边界。改用 surfaceContainer，
+    // 它本身就是「比背景高一阶的容器面」，再叠强调色就有清晰的悬浮感。
+    val base = if (dark) scheme.surfaceContainer else scheme.surface
 
     // 玻璃主体：强调色轻染 + 白/黑偏移，确保与页面背景有可见差异
     val glassTop = if (dark) {
-        accent.copy(alpha = 0.16f).compositeOver(scheme.surface)
+        accent.copy(alpha = if (pureBlack) 0.20f else 0.16f).compositeOver(base)
     } else {
         Color.White.copy(alpha = 0.90f).compositeOver(accent.copy(alpha = 0.10f))
     }
     val glassBottom = if (dark) {
-        accent.copy(alpha = 0.06f).compositeOver(scheme.surface)
+        accent.copy(alpha = if (pureBlack) 0.08f else 0.06f).compositeOver(base)
     } else {
         Color.White.copy(alpha = 0.62f).compositeOver(accent.copy(alpha = 0.05f))
     }
