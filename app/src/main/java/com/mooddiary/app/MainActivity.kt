@@ -3,6 +3,7 @@ package com.mooddiary.app
 import android.Manifest
 import android.app.Application
 import android.app.DatePickerDialog
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -246,7 +247,17 @@ class MoodRepository(private val store: MoodStore) {
     suspend fun overwrite(
         date: LocalDate, hour: Int, moodId: Int, note: String, old: MoodEntry?, conflict: MoodEntry
     ) = store.transaction {
-        store.delete(conflict)
+        // 弹窗展示的是快照，从展示到用户点「覆盖」之间该行可能已被
+        // 其它路径改写（如通知快速记录）。删除按主键匹配，会把用户
+        // 没见过的内容一起抹掉，所以这里按 (date,hour) 重读校验：
+        // - 行已不存在：无需删除，直接写入；
+        // - 行仍是用户确认时的那条（updatedAt 未变）：安全删除；
+        // - 内容已变化：保守起见仍覆盖该时段（用户已明确选择覆盖），
+        //   但以最新行为删除对象，避免按主键误删别的行。
+        val current = store.findByDateHour(date.toString(), hour)
+        if (current != null && current.id == conflict.id) {
+            store.delete(current)
+        }
         val entry = buildEntry(date, hour, moodId, note, old)
         if (old == null) store.insert(entry) else store.update(entry)
     }
@@ -349,8 +360,28 @@ fun applyMoods(next: List<Mood>) {
     }
 }
 
-/** 生成一个未被占用的心情 id */
-fun nextMoodId(): Int = (moods.maxOfOrNull { it.id } ?: 0) + 1
+/**
+ * 生成一个未被占用的心情 id。
+ *
+ * 必须用**持久化的单调递增计数器**，不能用 max(existing)+1：
+ * 删除分值最高的心情（如 id 9）后再新增，max+1 会复用 id 9，
+ * 而数据库里引用 id 9 的历史记录会被悄悄重新归属到这个**新心情**上——
+ * 日历、统计全部错乱。计数器存入 SharedPreferences，随目录一起持久化。
+ */
+fun nextMoodId(): Int = nextMoodId(null)
+
+/** 带 Context 的重载：能读写持久化计数器；无 Context（测试等）退回 max+1 */
+fun nextMoodId(context: Context?): Int {
+    if (context == null) return (moods.maxOfOrNull { it.id } ?: 0) + 1
+    val prefs = context.applicationContext
+        .getSharedPreferences(SettingsStore.PREFS, Context.MODE_PRIVATE)
+    val counter = prefs.getInt(KEY_MOOD_ID_COUNTER, 0)
+    val next = maxOf(counter, moods.maxOfOrNull { it.id } ?: 0) + 1
+    prefs.edit().putInt(KEY_MOOD_ID_COUNTER, next).apply()
+    return next
+}
+
+private const val KEY_MOOD_ID_COUNTER = "mood_id_counter"
 
 /** 心情目录被改写的次数；统计页以它为缓存 key，保证目录变化后立即重算 */
 var moodEpoch: Int by mutableStateOf(0)
@@ -358,11 +389,13 @@ var moodEpoch: Int by mutableStateOf(0)
 
 class MainActivity : ComponentActivity() {
     private val openHour = mutableStateOf<Int?>(null)
+    /** 通知对应的日期（发通知那天）。点击在午夜后时不能用 LocalDate.now() */
+    private val openDate = mutableStateOf<LocalDate?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        openHour.value = intent.getIntExtra(EXTRA_HOUR, -1).takeIf { it >= 0 }
+        readOpenExtras(intent)
         val store = SettingsStore(this)
         store.syncReminder()
         // 启动时载入用户自定义的心情目录（未自定义则沿用内置默认）
@@ -377,11 +410,17 @@ class MainActivity : ComponentActivity() {
         // 把映射固化进数据库后，显示不再依赖任何兜底规则，以后永不漂移。
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             runCatching {
-                val dao = MoodDatabase.get(applicationContext).dao()
+                val db = MoodDatabase.get(applicationContext)
+                val dao = db.dao()
                 // 让 SQL 只返回真正失配的行；无需修复时为空，几乎没有开销
                 val broken = dao.findWithUnknownMood(moods.map { it.id })
-                broken.forEach { e ->
-                    dao.update(e.copy(moodId = moodOf(e.moodId).id))
+                // 全部更新包进一个事务：进程中途被杀时要么全改要么全不改，
+                // 不会留下「改了一半」的中间态（半改状态下统计会混用
+                // 新旧两套映射，且重新启动时的二次修复与第一次结果可能不同）
+                db.withTransaction {
+                    broken.forEach { e ->
+                        dao.update(e.copy(moodId = moodOf(e.moodId).id))
+                    }
                 }
             }
         }
@@ -396,6 +435,7 @@ class MainActivity : ComponentActivity() {
             ) {
                 MoodDiaryApp(
                     openHour = openHour,
+                    openDate = openDate,
                     settingsStore = store,
                     startTab = settings.startTab.index()
                 )
@@ -405,11 +445,26 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        intent.getIntExtra(EXTRA_HOUR, -1).takeIf { it >= 0 }?.let { openHour.value = it }
+        readOpenExtras(intent)
+    }
+
+    /** 从通知跳转的 intent 中读取目标小时与日期（旧版通知无日期，退回今天） */
+    private fun readOpenExtras(intent: Intent) {
+        intent.getIntExtra(EXTRA_HOUR, -1).takeIf { it >= 0 }?.let { h ->
+            openHour.value = h
+            openDate.value = intent.getStringExtra(EXTRA_DATE)
+                ?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+                ?: LocalDate.now()
+            // 用完立即从 intent 上清掉：否则旋转等配置变化触发 onCreate
+            // 时会再次读取，导致编辑弹窗在用户已关闭后又被重新打开
+            intent.removeExtra(EXTRA_HOUR)
+            intent.removeExtra(EXTRA_DATE)
+        }
     }
 
     companion object {
         const val EXTRA_HOUR = "extra_hour"
+        const val EXTRA_DATE = "extra_date"
     }
 }
 
@@ -513,6 +568,26 @@ fun MoodDiaryTheme(
     val dark = shouldUseDarkTheme(themeMode)
     val context = LocalContext.current
     val canDynamic = useDynamicColor && Build.VERSION.SDK_INT >= 31
+
+    // 系统栏（状态栏/导航栏）图标明暗必须跟随**应用内**主题，而不是系统主题。
+    // enableEdgeToEdge() 在 onCreate 里只按系统夜间模式决定一次图标颜色：
+    // 用户在应用内选了「深色」而系统是浅色时，状态栏图标会是深色，
+    // 画在纯黑背景上彻底看不见（时钟/电量/信号全部消失），反之亦然。
+    // 这里在 dark 变化时重新调用一次，传入应用内的 dark 标志。
+    val activity = LocalContext.current.let { ctx ->
+        var c: android.content.Context? = ctx
+        while (c is android.content.ContextWrapper) {
+            if (c is ComponentActivity) break
+            c = c.baseContext
+        }
+        c as? ComponentActivity
+    }
+    SideEffect {
+        activity ?: return@SideEffect
+        val lightScrim = android.graphics.Color.TRANSPARENT
+        val style = androidx.activity.SystemBarStyle.auto(lightScrim, lightScrim) { !dark }
+        activity.enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+    }
 
     val colorScheme = when {
         canDynamic && dark -> dynamicDarkColorScheme(context)
@@ -635,6 +710,7 @@ private data class PendingConflict(
 fun MoodDiaryApp(
     vm: MoodViewModel = androidx.lifecycle.viewmodel.compose.viewModel(),
     openHour: MutableState<Int?> = mutableStateOf(null),
+    openDate: MutableState<LocalDate?> = mutableStateOf(null),
     settingsStore: SettingsStore? = null,
     startTab: Int = 0
 ) {
@@ -652,9 +728,15 @@ fun MoodDiaryApp(
         editTarget = Triple(date, hour, entries.firstOrNull { it.date == date.toString() && it.hour == hour })
     }
 
-    // 点击通知跳转：直接打开当前小时的记录弹窗
+    // 点击通知跳转：直接打开对应小时的记录弹窗。
+    // 日期用「发通知那天」（openDate）：23:00 的通知拖到 00:30 才点，
+    // 若用 LocalDate.now() 编辑器会开到次日，保存后记录落在错误的日期上。
     LaunchedEffect(openHour.value) {
-        openHour.value?.let { h -> openEdit(LocalDate.now(), h); openHour.value = null }
+        openHour.value?.let { h ->
+            openEdit(openDate.value ?: LocalDate.now(), h)
+            openHour.value = null
+            openDate.value = null
+        }
     }
 
     val navItems = listOf(
@@ -789,7 +871,12 @@ fun MoodDiaryApp(
                         }
                     }
                 )
-                1 -> RecordsPage(entries) { e -> openEdit(LocalDate.parse(e.date), e.hour) }
+                1 -> RecordsPage(entries) { e ->
+                    // 数据库里的 date 是文本；异常数据（迁移残留/外部写入）不能
+                    // 让整个记录页崩溃，与 computeMonthStats 的 runCatching 口径一致
+                    val d = runCatching { LocalDate.parse(e.date) }.getOrNull()
+                    if (d != null) openEdit(d, e.hour)
+                }
                 2 -> StatsPage(month, entries, { month = it })
                 else -> SettingsPage(
                     store = store,

@@ -56,11 +56,16 @@ fun SettingsPage(
 
     // 进入页面时刷新一次：用户从系统设置返回后状态会变
     var ignoringBattery by remember { mutableStateOf(Reminder.isIgnoringBatteryOptimizations(context)) }
+    // 精确闹钟权限也要用状态承接：直接在组合里调 canScheduleExactAlarms()
+    // 没有状态订阅，用户授权后从系统设置返回时不会重组，
+    // 红色警告会一直挂在页面上（反之被撤销后也不出现）。
+    var exactAlarmsGranted by remember { mutableStateOf(Reminder.canScheduleExactAlarms(context)) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 ignoringBattery = Reminder.isIgnoringBatteryOptimizations(context)
+                exactAlarmsGranted = Reminder.canScheduleExactAlarms(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -291,7 +296,7 @@ fun SettingsPage(
                 // 精确闹钟权限：Android 12+ 起默认可能未授予。
                 // 未授予时闹钟只能走「带窗口的近似触发」，可能被系统推迟，
                 // 这正是「加入白名单也不响」的常见原因，因此必须明确提示并给出入口。
-                if (!Reminder.canScheduleExactAlarms(context)) {
+                if (!exactAlarmsGranted) {
                     Text(
                         "缺少「精确闹钟」权限，提醒可能被系统推迟甚至不触发。请点下方按钮开启。",
                         style = MaterialTheme.typography.bodySmall,
@@ -866,7 +871,15 @@ fun MoodEditorDialog(
                         Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(10.dp))
-                            .clickable { editing = m }
+                            .clickable {
+                                // 同「添加心情」：切换编辑目标前，把尚未入列表的
+                                // 新心情先落进 draft，避免静默丢失
+                                val cur = editing
+                                if (cur != null && draft.none { it.id == cur.id }) {
+                                    draft = draft + cur
+                                }
+                                editing = m
+                            }
                             .padding(vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -894,6 +907,11 @@ fun MoodEditorDialog(
                                 ).show()
                             } else {
                                 draft = draft.filter { it.id != m.id }
+                                // 修复「删除后又被保存回来」：若正在编辑的正是这条，
+                                // 必须同时清掉 editing——否则保存时合并逻辑会把
+                                // editing（还持有被删的心情）重新追加回列表，
+                                // 用户的删除被静默撤销。
+                                if (editing?.id == m.id) editing = null
                             }
                         }) {
                             Icon(Icons.Default.Delete, "删除", tint = MaterialTheme.colorScheme.error)
@@ -905,8 +923,18 @@ fun MoodEditorDialog(
                 Spacer(Modifier.height(10.dp))
                 OutlinedButton(
                     onClick = {
+                        // 先把正在编辑的心情落进 draft（若它还没在列表里，
+                        // 说明是刚添加、尚未保存的新心情——直接切换 editing
+                        // 会把它整个丢掉）。
+                        val cur = editing
+                        if (cur != null && draft.none { it.id == cur.id }) {
+                            draft = draft + cur
+                        }
+                        // 传 Context：id 计数器持久化。max+1 会在
+                        // 「删掉最大 id 的心情后再新增」时复用旧 id，
+                        // 导致历史记录被重新归属到新心情（详见 nextMoodId 注释）。
                         editing = Mood(
-                            id = nextMoodId(),
+                            id = nextMoodId(context),
                             label = "新心情",
                             emoji = "🙂",
                             color = accentColor,
@@ -997,10 +1025,15 @@ private fun MoodEditForm(
         0xFFAB47BC, 0xFF26A69A, 0xFFEC407A, 0xFF7E57C2, 0xFF8D6E63
     )
 
+    // 名称含换行或 \u0001（存储分隔符）会破坏 MoodCatalog 的行/字段结构：
+    // 解析时该行会被丢弃，用户的心情在重启后消失。在输入处直接剔除。
+    // （singleLine=true 只挡住键盘回车，粘贴进来的换行仍会进文本。）
+    fun sanitizeLabel(raw: String) = raw.replace("\n", " ").replace("\r", " ").replace("\u0001", " ")
+
     Column {
         OutlinedTextField(
             value = mood.label,
-            onValueChange = { onChange(mood.copy(label = it)) },
+            onValueChange = { onChange(mood.copy(label = sanitizeLabel(it))) },
             label = { Text("名称") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()

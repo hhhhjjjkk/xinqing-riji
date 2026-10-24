@@ -45,9 +45,13 @@ object Reminder {
      *
      * 原先直接用 hour 作为 id：跨天后同一个整点会复用相同 id，
      * 从而替换掉昨天那条还没被划掉的通知，导致旧提醒无声消失。
+     *
+     * date 必须传「发通知时」的日期，不能在点击/取消时重新取 now()：
+     * 23:00 的通知拖到次日 00:05 才点，dayOfYear 已变化，
+     * 用新日期算出的 id 取消不掉旧通知，通知可被反复点击、重复写库。
      */
-    fun notificationId(hour: Int): Int =
-        LocalDate.now().dayOfYear * 100 + hour
+    fun notificationId(date: LocalDate, hour: Int): Int =
+        date.dayOfYear * 100 + hour
 
     /** 展开态槽位的编译期 id 表（顺序与布局 slot_0..9 一致，两行各 5 个） */
     private val SLOT_BTN_IDS = intArrayOf(
@@ -78,6 +82,11 @@ object Reminder {
     const val ACTION_QUICK_MOOD = "com.mooddiary.app.ACTION_QUICK_MOOD"
     const val EXTRA_MOOD_ID = "extra_mood_id"
     const val EXTRA_HOUR = "extra_hour"
+    /**
+     * 快速记录的目标日期（yyyy-MM-dd）。随 extras 在发通知时写入。
+     * 点击时再取 now() 会把跨午夜点击的记录写到错误的一天（见 notificationId 注释）。
+     */
+    const val EXTRA_DATE = "extra_date"
 
     /**
      * 通知里的表情按钮。按分值倒序，最多 5 个（RemoteViews 布局只有 5 个槽位）。
@@ -410,9 +419,16 @@ object Reminder {
     private fun sendNotificationInternal(context: Context, hour: Int) {
         ensureChannel(context)
 
-        // 点通知整体仍可跳转 app（打开记录弹窗），但不是必须的
+        // 发通知时锁定日期：后续的快速记录、通知取消都以此为准，
+        // 跨午夜点击也不会把记录写错天、或取消不到这条通知。
+        val notifDate = LocalDate.now()
+
+        // 点通知整体仍可跳转 app（打开记录弹窗），但不是必须的。
+        // 把发通知时的日期一并传过去：点击发生在午夜后时，
+        // app 端若用 LocalDate.now() 会把编辑器开到错误的一天。
         val openIntent = Intent(context, MainActivity::class.java).apply {
             putExtra(MainActivity.EXTRA_HOUR, hour)
+            putExtra(MainActivity.EXTRA_DATE, notifDate.toString())
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         val openPending = PendingIntent.getActivity(
@@ -504,6 +520,7 @@ object Reminder {
                     action = ACTION_QUICK_MOOD
                     putExtra(EXTRA_MOOD_ID, moodId)
                     putExtra(EXTRA_HOUR, hour)
+                    putExtra(EXTRA_DATE, notifDate.toString())
                 },
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
@@ -525,30 +542,55 @@ object Reminder {
             .build()
 
         context.getSystemService(NotificationManager::class.java)
-            .notify(notificationId(hour), notification)
+            .notify(notificationId(notifDate, hour), notification)
     }
 
-    /** 通知里点了表情：直接写库，不跳转 app */
-    fun recordQuickMood(context: Context, hour: Int, moodId: Int) {
+    /**
+     * 通知里点了表情：直接写库，不跳转 app。
+     *
+     * date 来自发通知时的 extras（见 [EXTRA_DATE]），不能在点击时重新取 now()——
+     * 23:00 的通知在 00:05 被点击时，按 now() 会把记录写到新的一天。
+     *
+     * 原实现用 runBlocking + OnConflictStrategy.ABORT 有两个问题：
+     * - runBlocking 挂在广播主线程上，磁盘慢时直接 ANR；
+     * - 与编辑弹窗并发保存时唯一索引冲突会抛 SQLiteConstraintException
+     *   且无人捕获，进程崩溃、通知也取消不掉。
+     * 现改为：冲突时按「最后写入胜出」回退为 update（快速记录语义上就该覆盖），
+     * 并把所有异常兜住——记录失败也不能崩掉接收器进程。
+     */
+    fun recordQuickMood(context: Context, hour: Int, moodId: Int, dateStr: String) {
         val db = MoodDatabase.get(context)
         val dao = db.dao()
-        val dateStr = LocalDate.now().toString()
-
-        // 用事务保证原子性：有则更新，无则插入
-        kotlinx.coroutines.runBlocking {
-            db.withTransaction {
-                val existing = dao.findByDateHour(dateStr, hour)
-                if (existing != null) {
-                    dao.update(existing.copy(moodId = moodId, updatedAt = System.currentTimeMillis()))
-                } else {
-                    dao.insert(MoodEntry(date = dateStr, hour = hour, moodId = moodId))
+        try {
+            kotlinx.coroutines.runBlocking {
+                db.withTransaction {
+                    val existing = dao.findByDateHour(dateStr, hour)
+                    if (existing != null) {
+                        dao.update(existing.copy(moodId = moodId, updatedAt = System.currentTimeMillis()))
+                    } else {
+                        try {
+                            dao.insert(MoodEntry(date = dateStr, hour = hour, moodId = moodId))
+                        } catch (e: android.database.sqlite.SQLiteConstraintException) {
+                            // 与应用内保存并发：行刚被别人插入。快速记录语义是
+                            // 「覆盖该时段」，回退为 update，绝不静默丢数据。
+                            val row = dao.findByDateHour(dateStr, hour)
+                            row?.let {
+                                dao.update(it.copy(moodId = moodId, updatedAt = System.currentTimeMillis()))
+                            }
+                        }
+                    }
                 }
             }
+        } catch (e: Exception) {
+            android.util.Log.e("MoodReminder", "快速记录失败（$dateStr $hour 点）", e)
         }
 
-        // 取消通知：已记录，不再需要提醒
-        context.getSystemService(NotificationManager::class.java)
-            .cancel(notificationId(hour))
+        // 取消通知：已记录，不再需要提醒。id 用发通知那天算，与 notify 时一致。
+        runCatching {
+            val date = java.time.LocalDate.parse(dateStr)
+            context.getSystemService(NotificationManager::class.java)
+                .cancel(notificationId(date, hour))
+        }
     }
 
     // ---------- 电池优化 ----------

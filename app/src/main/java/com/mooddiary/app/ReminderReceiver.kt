@@ -44,15 +44,20 @@ class ReminderReceiver : BroadcastReceiver() {
     private fun handleQuickMood(context: Context, intent: Intent) {
         val moodId = intent.getIntExtra(Reminder.EXTRA_MOOD_ID, 0)
         val hour = intent.getIntExtra(Reminder.EXTRA_HOUR, -1)
+        // 日期必须取发通知时随 extras 传入的值（见 Reminder.EXTRA_DATE）：
+        // 跨午夜点击若改用 now()，记录会写到错误的一天。
+        val dateStr = intent.getStringExtra(Reminder.EXTRA_DATE)
+            ?: java.time.LocalDate.now().toString()   // 旧版通知无此 extra，退回旧行为
         if (moodId == 0 || hour < 0) return
 
         val pending = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                Reminder.recordQuickMood(context, hour, moodId)
-            } finally {
-                pending.finish()
-            }
+                Reminder.recordQuickMood(context, hour, moodId, dateStr)
+            } catch (e: Throwable) {
+                // 与 handleTick 同样的保护：数据库异常绝不能崩掉接收器进程
+                android.util.Log.e(TAG, "快速记录异常", e)
+            } finally { pending.finish() }
         }
     }
 }
