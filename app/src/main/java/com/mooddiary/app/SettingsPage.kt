@@ -5,6 +5,13 @@ import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.zIndex
 import kotlin.math.roundToInt
 import androidx.compose.material3.Slider
 import androidx.compose.material3.OutlinedTextField
@@ -19,8 +26,8 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.foundation.clickable
-import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -954,10 +961,15 @@ private fun HourPickerDialog(
 
 
 /**
- * 心情标签管理：增删改。
+ * 心情标签管理：增删改 + 长按拖动排序。
  *
  * 编辑的是一份本地副本，点「保存」才写回并持久化，
  * 避免边改边写导致历史记录引用的 id 中途失效。
+ *
+ * 排序交互：长按任意一行可拖动换位（点按仍是编辑、右侧按钮仍是删除）。
+ * 实现要点：拖动中通过 graphicsLayer 平移被拖行，越过相邻行中点时
+ * 立刻在 draft 里换位；换位后布局槽位随之变化，必须把已累积的
+ * 拖动偏移抵消掉相邻行的高度，被拖行才不会在指尖下跳动。
  */
 @Composable
 fun MoodEditorDialog(
@@ -968,17 +980,114 @@ fun MoodEditorDialog(
     var editing by remember { mutableStateOf<Mood?>(null) }
     // 在 composable 上下文里先取出，供 onClick 等非 composable 闭包使用
     val accentColor = MaterialTheme.colorScheme.primary
+    val haptic = LocalHapticFeedback.current
+
+    // —— 长按拖动排序状态 ——
+    // 正在拖动的心情 id；null 表示没有拖动
+    var draggingId by remember { mutableStateOf<Int?>(null) }
+    // 被拖行相对其「当前布局槽位」的 Y 偏移
+    var dragOffsetY by remember { mutableFloatStateOf(0f) }
+    // 每行的高度（id → px）。只在 onGloballyPositioned 里写入、
+    // 只在手势回调里读取，不参与组合，因此不会引起额外重组。
+    val rowHeights = remember { HashMap<Int, Float>() }
 
     AlertDialog(
         onDismissRequest = onClose,
         title = { Text("心情标签") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    "点按编辑，长按拖动可调整顺序（保存后生效）",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(6.dp))
                 draft.forEach { m ->
+                    // 必须用 key 包住：换位时若靠「槽位」复用节点，
+                    // pointerInput 的 key 会从 A.id 变成 C.id，手势协程被取消，
+                    // 拖拽在第一次换位的瞬间就断掉。key 让节点跟随心情移动。
+                    key(m.id) {
+                    val isDragging = draggingId == m.id
                     Row(
                         Modifier
                             .fillMaxWidth()
+                            .onGloballyPositioned { coords ->
+                                // 高度只由内容决定，换位前后不变，随时记录即可
+                                rowHeights[m.id] = coords.size.height.toFloat()
+                            }
+                            // graphicsLayer 必须在 clip 之前：clip 会裁掉其后所有
+                            // 绘制内容，若放在前面，被拖行的平移会被裁在原位圆角内
+                            .graphicsLayer {
+                                if (isDragging) {
+                                    translationY = dragOffsetY
+                                    // 拾起感：轻微放大 + 压一点透明度
+                                    scaleX = 1.02f
+                                    scaleY = 1.02f
+                                    alpha = 0.92f
+                                }
+                            }
+                            .zIndex(if (isDragging) 1f else 0f)
                             .clip(RoundedCornerShape(10.dp))
+                            .background(
+                                if (isDragging) accentColor.copy(alpha = 0.10f)
+                                else Color.Transparent
+                            )
+                            .pointerInput(m.id) {
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = {
+                                        draggingId = m.id
+                                        dragOffsetY = 0f
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    },
+                                    onDrag = { change, amount ->
+                                        change.consume()
+                                        var newOffset = dragOffsetY + amount.y
+                                        val myH = rowHeights[m.id] ?: return@detectDragGesturesAfterLongPress
+                                        var idx = draft.indexOfFirst { it.id == m.id }
+                                        if (idx >= 0) {
+                                            // 向下越过下一行中点：与下一行换位
+                                            if (newOffset > 0 && idx < draft.lastIndex) {
+                                                val belowH = rowHeights[draft[idx + 1].id]
+                                                if (belowH != null && newOffset > (myH + belowH) / 2f) {
+                                                    draft = draft.toMutableList().apply {
+                                                        add(idx, removeAt(idx + 1))
+                                                    }
+                                                    // 换位后布局槽位下移了 belowH，
+                                                    // 抵消掉才能保持手指下的位置连续
+                                                    newOffset = newOffset - belowH
+                                                    idx += 1
+                                                }
+                                            }
+                                            // 向上越过上一行中点：与上一行换位
+                                            // （idx 已在上方换位后重算，不会用过期下标）
+                                            if (newOffset < 0 && idx > 0) {
+                                                val aboveH = rowHeights[draft[idx - 1].id]
+                                                if (aboveH != null && -newOffset > (myH + aboveH) / 2f) {
+                                                    draft = draft.toMutableList().apply {
+                                                        add(idx - 1, removeAt(idx))
+                                                    }
+                                                    newOffset = newOffset + aboveH
+                                                    idx -= 1
+                                                }
+                                            }
+                                            // 边缘限制：拖到头后最多再滑出半行，
+                                            // 避免整行飞出列表范围
+                                            if (idx == 0) newOffset = newOffset.coerceAtLeast(-myH * 0.5f)
+                                            if (idx == draft.lastIndex) newOffset = newOffset.coerceAtMost(myH * 0.5f)
+                                        }
+                                        dragOffsetY = newOffset
+                                    },
+                                    onDragEnd = {
+                                        draggingId = null
+                                        dragOffsetY = 0f
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    },
+                                    onDragCancel = {
+                                        draggingId = null
+                                        dragOffsetY = 0f
+                                    }
+                                )
+                            }
                             .clickable {
                                 // 同「添加心情」：切换编辑目标前，把尚未入列表的
                                 // 新心情先落进 draft，避免静默丢失
@@ -1024,6 +1133,7 @@ fun MoodEditorDialog(
                         }) {
                             Icon(Icons.Default.Delete, "删除", tint = MaterialTheme.colorScheme.error)
                         }
+                    }
                     }
                     HorizontalDivider()
                 }
