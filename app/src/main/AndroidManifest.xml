@@ -11,27 +11,30 @@
     <!-- 跳转到「忽略电池优化」设置页需要 -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
-    <!-- ============ 自启动 / 后台运行 ============
-         Android 标准里并没有「自启动权限」这个可申请项，它是国内 ROM
-         （小米、华为、OPPO、vivo、三星等）自行加入的管控开关。
+    <!-- ============ 关于「自启动」================
+         先纠正一个流传很广的误解（本项目早期版本也写错过）：
 
-         关键点：这些 ROM 的「自启动管理」列表只收录**声明了对应厂商私有权限**
-         的应用；没有声明的应用在列表里会显示为灰色不可点，甚至压根不出现——
-         这正是「跳到设置页却无法开启自启动」的原因。
+         **Android 没有「自启动权限」**。它不在 AOSP 的权限模型里，不存在任何
+         可以用 <uses-permission> 声明的名字，也不存在任何可以在运行时申请的 API。
+         任何在清单里声明 miui.* / vivo.* / samsung.* 之类「厂商自启动权限」的写法，
+         对自启动开关**没有任何作用**——系统会直接忽略未知权限名；
+         而且自启动列表也从来不是按清单声明筛选的（它列出的是已安装的用户应用）。
 
-         下列权限在各厂商 ROM 上按普通权限处理，安装即授予、无需运行时申请；
-         在普通 AOSP / 类原生设备上会被系统直接忽略，不影响安装与运行。 -->
-    <!-- 小米 / Redmi：自启动管理页会检查该权限 -->
-    <uses-permission android:name="miui.permission.USE_INTERNAL_GENERAL_API" />
-    <!-- 华为 / 荣耀：启动管理 / 应用启动记录 -->
+         真正决定能否自启动的是这两件事：
+         1. RECEIVE_BOOT_COMPLETED（普通权限，安装即授予）—— 决定能否收到开机广播；
+         2. 厂商「手机管家 / 安全中心」里的自启动开关 —— 只能由用户在该页面手动打开。
+
+         唯一例外是华为 / 荣耀：其 systemmanager 暴露了 ContentProvider，
+         应用可以通过它真正读写自己的自启动状态（见 Reminder.huaweiSetAutoStart）。
+         下面这条厂商权限是为了访问那个 provider 而保留的。
+
+         历史上声明过、但确认无效并已删除的（留着只会误导后来的人）：
+           miui.permission.USE_INTERNAL_GENERAL_API
+           com.oppo.launcher.permission.READ_SETTINGS / WRITE_SETTINGS
+           com.vivo.permission.BACKGROUND_START
+           com.samsung.android.permission.KEEP_ALIVE -->
+    <!-- 华为 / 荣耀：访问 systemmanager 的启动管理 provider 需要 -->
     <uses-permission android:name="com.huawei.permission.external_app_settings.USE_COMPONENT" />
-    <!-- OPPO / 一加 / realme：允许后台运行 -->
-    <uses-permission android:name="com.oppo.launcher.permission.READ_SETTINGS" />
-    <uses-permission android:name="com.oppo.launcher.permission.WRITE_SETTINGS" />
-    <!-- vivo / iQOO：后台高耗电 / 自启动 -->
-    <uses-permission android:name="com.vivo.permission.BACKGROUND_START" />
-    <!-- 三星：应用保持活动 -->
-    <uses-permission android:name="com.samsung.android.permission.KEEP_ALIVE" />
 
     <!-- ============ 包可见性（Android 11+ 必须） ============
          Android 11 引入 package visibility：resolveActivity() 对未在 <queries>

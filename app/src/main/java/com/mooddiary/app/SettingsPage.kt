@@ -1,6 +1,9 @@
 package com.mooddiary.app
 
+import android.Manifest
 import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import kotlin.math.roundToInt
 import androidx.compose.material3.Slider
@@ -60,12 +63,15 @@ fun SettingsPage(
     // 没有状态订阅，用户授权后从系统设置返回时不会重组，
     // 红色警告会一直挂在页面上（反之被撤销后也不出现）。
     var exactAlarmsGranted by remember { mutableStateOf(Reminder.canScheduleExactAlarms(context)) }
+    // 通知权限同理：从系统设置返回后要立即反映到状态面板上
+    var notifGranted by remember { mutableStateOf(Reminder.hasNotificationPermission(context)) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 ignoringBattery = Reminder.isIgnoringBatteryOptimizations(context)
                 exactAlarmsGranted = Reminder.canScheduleExactAlarms(context)
+                notifGranted = Reminder.hasNotificationPermission(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -77,6 +83,23 @@ fun SettingsPage(
     var hourPicker by remember { mutableStateOf<Pair<String, Int>?>(null) }
     // 自启动跳转结果：null = 还没点过；跳转失败时在页面上展开手动路径指引
     var autoStartResult by remember { mutableStateOf<Reminder.AutoStartResult?>(null) }
+
+    // 通知权限请求器：提醒开关与权限状态面板都要用，因此提到最外层。
+    // 授予后才真正把提醒打开——否则闹钟排了、每小时却静默不发。
+    val notifPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        notifGranted = granted
+        if (granted) {
+            store.setReminderEnabled(true)
+        } else {
+            android.widget.Toast.makeText(
+                context,
+                "没有通知权限，提醒发了你也看不到。请到系统设置里允许本应用发送通知。",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+        }
+    }
 
     Column(
         Modifier
@@ -258,7 +281,14 @@ fun SettingsPage(
                 title = "每小时提醒",
                 subtitle = "整点提醒你记录当下的心情",
                 checked = settings.reminderEnabled,
-                onCheckedChange = { store.setReminderEnabled(it) }
+                onCheckedChange = { want ->
+                    if (want && Reminder.needsNotificationPermission(context)) {
+                        // 未授予通知权限：先弹系统权限框，授予后再真正开启
+                        notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    } else {
+                        store.setReminderEnabled(want)
+                    }
+                }
             )
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
             SwitchRow(
@@ -293,34 +323,126 @@ fun SettingsPage(
         // 提醒可靠性
         if (settings.reminderEnabled) {
             SettingsSection("提醒可靠性", cornerDp = settings.cornerLevel.dp()) {
-                // 精确闹钟权限：Android 12+ 起默认可能未授予。
-                // 未授予时闹钟只能走「带窗口的近似触发」，可能被系统推迟，
-                // 这正是「加入白名单也不响」的常见原因，因此必须明确提示并给出入口。
-                if (!exactAlarmsGranted) {
-                    Text(
-                        "缺少「精确闹钟」权限，提醒可能被系统推迟甚至不触发。请点下方按钮开启。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedButton(
-                        onClick = {
-                            if (android.os.Build.VERSION.SDK_INT >= 31) {
-                                runCatching {
-                                    context.startActivity(
-                                        Intent(
-                                            android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM
-                                        ).setData(
-                                            android.net.Uri.parse("package:${context.packageName}")
+                // —— 权限状态面板 ——
+                // 这三项是系统里真实存在、应用可以主动请求的权限。
+                // 之前页面只展示文案、从不发起任何请求，用户看到的就是
+                // 「软件没有请求任何权限」——提醒因此静默失效也毫无提示。
+                SettingLabel("权限状态")
+                PermissionRow(
+                    name = "通知权限",
+                    granted = notifGranted,
+                    why = "没有它，整点提醒发了也不会显示",
+                    actionText = "去开启",
+                    onAction = {
+                        if (android.os.Build.VERSION.SDK_INT >= 33) {
+                            notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        } else {
+                            // 低于 13 没有运行时权限，只能去系统通知设置页
+                            runCatching {
+                                context.startActivity(
+                                    Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                        .putExtra(
+                                            android.provider.Settings.EXTRA_APP_PACKAGE,
+                                            context.packageName
                                         )
-                                    )
-                                }
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
                             }
-                        },
-                        modifier = Modifier.pressBounce(pressedScale = 0.94f)
-                    ) { Text("开启精确闹钟权限") }
-                    Spacer(Modifier.height(12.dp))
+                        }
+                    }
+                )
+                Spacer(Modifier.height(8.dp))
+                PermissionRow(
+                    name = "精确闹钟权限",
+                    granted = exactAlarmsGranted,
+                    why = "没有它，闹钟可能被系统推迟甚至不触发",
+                    actionText = "去开启",
+                    onAction = { Reminder.requestExactAlarmPermission(context) }
+                )
+                Spacer(Modifier.height(8.dp))
+                PermissionRow(
+                    name = "电池优化白名单",
+                    granted = ignoringBattery,
+                    why = "没有它，深度休眠时会清掉闹钟和后台进程",
+                    actionText = "去设置",
+                    onAction = { Reminder.openBatteryOptimizationSettings(context) }
+                )
+
+                Spacer(Modifier.height(14.dp))
+                HorizontalDivider(Modifier.padding(bottom = 12.dp))
+
+                // —— 自启动 ——
+                // 用户会期待一个「请求自启动权限」的按钮。这里必须把事实讲清楚：
+                // Android 权限模型里根本没有「自启动」这一项，也没有对应 API。
+                // 之前页面把按钮写成「① 开启「自启动」权限」，暗示应用能申请它，
+                // 用户点了没生效自然认为功能坏了——问题出在措辞误导，不是功能缺失。
+                SettingLabel("自启动")
+                Text(
+                    "「自启动」不是一个 Android 权限，系统里没有可申请的开关，应用无法像申请" +
+                        "通知权限那样向你弹出授权框。它是手机厂商在「手机管家 / 安全中心」里" +
+                        "额外加的管控项，只能由你在那个页面里手动打开。\n\n" +
+                        "不打开的影响：在最近任务里划掉本应用、或用系统管家清理后台后，" +
+                        "系统会清除已注册的闹钟并禁止后台启动，整点提醒就不再响，" +
+                        "直到你重新打开本应用。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = { autoStartResult = Reminder.openAutoStartSettings(context) },
+                    modifier = Modifier.fillMaxWidth().pressBounce(pressedScale = 0.94f)
+                ) {
+                    Text("打开系统的自启动设置")
                 }
+                // 跳转结果反馈。之前是静默的，用户点了没反应会以为功能坏了。
+                when (autoStartResult) {
+                    Reminder.AutoStartResult.ENABLED_DIRECTLY -> {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "已通过系统接口直接为你开启自启动 ✓（华为/荣耀机型支持）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Reminder.AutoStartResult.VENDOR_PAGE -> {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "已进入本机的自启动管理页。请在本应用的开关处打开自启动" +
+                                "（有的机型还需要把「省电策略 / 后台运行」一并放开）。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Reminder.AutoStartResult.APP_DETAIL -> {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "本机没能直达自启动管理页，已改为打开应用详情页。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                    Reminder.AutoStartResult.FAILED -> {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "无法自动跳转系统设置。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                    null -> Unit
+                }
+                Spacer(Modifier.height(14.dp))
+                HorizontalDivider(Modifier.padding(bottom = 12.dp))
+
+                // 手动路径始终显示：即使成功跳到厂商页，用户也常常在那一堆开关里
+                // 找不到「自启动」到底在哪（尤其是把自启动藏在「应用启动管理」
+                // 或「耗电管理」里的 ROM）。
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "手动路径：${Reminder.autoStartManualHint()}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
 
                 Text(
                     "已使用精确闹钟。正常情况下重启手机后会自动恢复；若系统清除了提醒，重新打开 app 也会自动恢复。\n通知里可直接点表情快速记录，不用打开 app。",
@@ -331,68 +453,11 @@ fun SettingsPage(
                     Spacer(Modifier.height(10.dp))
                     Text(
                         "为什么在应用里测试正常、到了整点却不响：\n" +
-                            "部分手机在「最近任务」里划掉本应用或清理后台后，会清除已注册的闹钟并限制自启动；" +
-                            "清除期间应用无法唤醒。重新打开 app 会自动恢复排程。若希望不手动打开也能及时提醒，请在手机设置中放行后台运行。\n\n" +
-                            "请依次完成两步：\n" +
-                            "① 允许自启动（点击下方第一个按钮）\n" +
-                            "② 电量策略设为「无限制」/ 关闭省电优化（第二个按钮）",
+                            "部分手机在「最近任务」里划掉本应用或清理后台后，会清除已注册的闹钟并限制后台运行；" +
+                            "清除期间应用无法唤醒。重新打开 app 会自动恢复排程。" +
+                            "若希望不手动打开也能及时提醒，请按上面的「电池优化白名单」放行后台运行。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedButton(
-                        onClick = {
-                            autoStartResult = Reminder.openAutoStartSettings(context)
-                        },
-                        modifier = Modifier.pressBounce(pressedScale = 0.94f)
-                    ) {
-                        Text("① 开启「自启动」权限")
-                    }
-                    // 跳转结果反馈：厂商页可达 / 落到应用详情页 / 完全打不开，
-                    // 三种情况给不同提示。之前是静默的，用户点了没反应会以为功能坏了；
-                    // 且部分 ROM 的自启动列表不列出未声明厂商权限的应用（已在本版补齐声明）。
-                    when (autoStartResult) {
-                        Reminder.AutoStartResult.VENDOR_PAGE -> {
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                "已进入本机的自启动管理页，请在列表中找到「心情日记」并打开开关" +
-                                    "（若列表里没有本应用，可点下方按钮改用系统应用详情页）。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        Reminder.AutoStartResult.APP_DETAIL -> {
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                "本机没能直达「自启动管理」页，已改为打开系统应用详情页。\n" +
-                                    "请按此路径手动开启：\n${Reminder.autoStartManualHint()}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error
-                            )
-                        }
-                        Reminder.AutoStartResult.FAILED -> {
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                "无法自动跳转系统设置，请手动开启：\n${Reminder.autoStartManualHint()}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error
-                            )
-                        }
-                        null -> Unit
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = { Reminder.openBatteryOptimizationSettings(context) },
-                        modifier = Modifier.pressBounce(pressedScale = 0.94f)
-                    ) {
-                        Text("② 设为「无限制」/ 关闭省电优化")
-                    }
-                } else {
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "已加入电池优化白名单 ✓",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary
                     )
                 }
 
@@ -415,6 +480,8 @@ fun SettingsPage(
                         diagResult = r
                         // 顺手刷新几项会变化的状态
                         ignoringBattery = Reminder.isIgnoringBatteryOptimizations(context)
+                        exactAlarmsGranted = Reminder.canScheduleExactAlarms(context)
+                        notifGranted = Reminder.hasNotificationPermission(context)
                     },
                     modifier = Modifier.pressBounce(pressedScale = 0.94f)
                 ) { Text("模拟一次整点触发") }
@@ -763,6 +830,47 @@ private fun SettingsSection(
 @Composable
 private fun SettingLabel(text: String) {
     Text(text, fontWeight = FontWeight.Medium)
+}
+
+/**
+ * 一行权限状态：左侧名称 + 说明 + 已授予/待开启标记，右侧「去开启」按钮。
+ * 已授予时按钮收起、只留一个绿色对勾，避免用户反复点已经开好的权限。
+ */
+@Composable
+private fun PermissionRow(
+    name: String,
+    granted: Boolean,
+    why: String,
+    actionText: String,
+    onAction: () -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                if (granted) "$name ✓" else name,
+                fontWeight = FontWeight.Medium,
+                color = if (granted) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                if (granted) "已开启" else why,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (granted) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (!granted) {
+            Spacer(Modifier.width(10.dp))
+            TextButton(
+                onClick = onAction,
+                modifier = Modifier.pressBounce(pressedScale = 0.94f)
+            ) { Text(actionText) }
+        }
+    }
 }
 
 @Composable

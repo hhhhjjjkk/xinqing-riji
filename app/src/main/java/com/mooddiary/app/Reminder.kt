@@ -155,36 +155,52 @@ object Reminder {
      * 跳转结果，供界面区分「已打开厂商自启动页」「已打开应用详情页」和「完全失败」，
      * 从而在失败时给出可照着做的手动路径，而不是点了没反应。
      */
-    enum class AutoStartResult { VENDOR_PAGE, APP_DETAIL, FAILED }
+    enum class AutoStartResult {
+        /** 华为/荣耀：通过系统 provider 直接开启成功，无需用户再操作 */
+        ENABLED_DIRECTLY,
+        /** 已跳到厂商自启动管理页，需用户在列表里手动打开 */
+        VENDOR_PAGE,
+        /** 厂商页打不开，已退到应用详情页 */
+        APP_DETAIL,
+        /** 完全无法跳转，只能看文字路径 */
+        FAILED
+    }
 
     /**
      * 跳转到「自启动 / 后台运行」管理页。
      *
-     * 说明：Android 标准并没有「自启动权限」这种可声明的权限，
-     * 它是国内厂商 ROM（小米、华为、OPPO、vivo 等）自行加入的管控项。
-     * 若用户在最近任务里划掉应用（force stop），系统会清除该应用
-     * 已注册的全部闹钟并禁止其自启动——此时任何纯应用层的努力都无法
-     * 唤醒进程，必须由用户在系统设置中放行。
+     * ⚠️ 先把最重要的事实说清楚（这也是用户反复困惑的点）：
+     * **Android 根本没有「自启动权限」这种东西**，它不是 Android 权限模型的一部分，
+     * 没有任何 <uses-permission> 能声明它，也没有任何 API 能申请它。
+     * 它是国内厂商 ROM 在自家「手机管家」里加的一个开关，权限模型的归属是厂商自己，
+     * 而不是 Android。所以在绝大多数机型上，应用唯一能做的是**跳转到那个设置页**，
+     * 由用户手动打开——这不是本应用偷懒没做，是系统层面就没有这个接口。
      *
-     * 两个历史坑：
-     * 1. 只在 AndroidManifest 里声明 RECEIVE_BOOT_COMPLETED 是不够的——
-     *    厂商自启动列表只收录声明了自家私有权限的应用，未声明的会显示为
-     *    灰色不可点。现已在清单中补齐（见 AndroidManifest.xml）。
-     * 2. 厂商 Activity 名会随 ROM 版本变化，且部分 ROM 该页需要特定权限才可打开，
-     *    因此这里逐个候选尝试，并用 resolveActivity 先确认可达，
-     *    全部失败才退回应用详情页，并把结果返回给调用方展示引导文案。
+     * 唯一的例外是华为/荣耀：它的 systemmanager 暴露了一个 ContentProvider，
+     * 可以真正读写本应用的自启动状态（见 [huaweiSetAutoStart]）。
+     * 因此这里优先尝试「直接开启」，失败再退回跳转。
+     *
+     * 另外，清单里声明厂商私有 <uses-permission> 并不能让应用出现在自启动列表里——
+     * 自启动列表只按「已安装的用户应用」列出，与清单声明无关（历史误区已纠正）。
      */
     fun openAutoStartSettings(context: Context): AutoStartResult {
         val pkg = context.packageName
+
+        // ① 华为/荣耀：尝试通过 BootManagerProvider 直接开启，这是唯一能编程控制的通道
+        huaweiSetAutoStart(context, true)?.let { ok ->
+            if (ok) return AutoStartResult.ENABLED_DIRECTLY
+            // provider 存在但拒绝写入（多见于 HarmonyOS/EMUI 10+）：继续走跳转
+        }
+
         // 各厂商的自启动管理页（按常见程度排序，一个厂商给多个候选）
         val candidates = listOf(
-            // 小米 / Redmi
+            // 小米 / Redmi / POCO（HyperOS 仍是这个入口）
             "com.miui.securitycenter" to "com.miui.permcenter.autostart.AutoStartManagementActivity",
             "com.miui.securitycenter" to "com.miui.powercenter.PowerSettings",
             // 华为 / 荣耀
             "com.huawei.systemmanager" to "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity",
-            "com.huawei.systemmanager" to "com.huawei.systemmanager.optimize.process.ProtectActivity",
             "com.huawei.systemmanager" to "com.huawei.systemmanager.appcontrol.activity.StartupAppControlActivity",
+            "com.huawei.systemmanager" to "com.huawei.systemmanager.optimize.process.ProtectActivity",
             // OPPO / 一加 / realme
             "com.coloros.safecenter" to "com.coloros.safecenter.permission.startup.StartupAppListActivity",
             "com.coloros.safecenter" to "com.coloros.safecenter.startupapp.StartupAppListActivity",
@@ -199,7 +215,6 @@ object Reminder {
             "com.samsung.android.sm" to "com.samsung.android.sm.ui.battery.BatteryActivity",
             // 联想 / 魅族 / 中兴等
             "com.lenovo.security" to "com.lenovo.security.purebackground.PureBackgroundActivity",
-            "com.meizu.safe" to "com.meizu.safe.security.SHOW_APPSEC",
             "com.zte.heartyservice" to "com.zte.heartyservice.setting.ClearMemoryActivity"
         )
         for ((p, cls) in candidates) {
@@ -220,6 +235,17 @@ object Reminder {
             if (ok) return AutoStartResult.VENDOR_PAGE
         }
 
+        // 魅族用 action 而非组件名，单独试一次
+        val meizu = runCatching {
+            context.startActivity(
+                Intent("com.meizu.safe.security.SHOW_APPSEC")
+                    .addCategory(Intent.CATEGORY_DEFAULT)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+            true
+        }.getOrDefault(false)
+        if (meizu) return AutoStartResult.VENDOR_PAGE
+
         // 厂商页都不可达：退回应用详情页（部分 ROM 的自启动开关就在此处）
         val detail = runCatching {
             context.startActivity(
@@ -230,6 +256,50 @@ object Reminder {
             true
         }.getOrDefault(false)
         return if (detail) AutoStartResult.APP_DETAIL else AutoStartResult.FAILED
+    }
+
+    /**
+     * 华为 / 荣耀：读写本应用的自启动开关。
+     *
+     * EMUI 的 com.huawei.systemmanager 注册了一个 provider，
+     * 外部应用可以通过 getStartupInfo / setStartupInfo 查询和修改自己的启动状态。
+     * 这是整个 Android 生态里极少数**真的能由应用自己开启自启动**的通道，
+     * 所以在华为设备上本应用确实做到了「请求自启动」，不只是跳转。
+     *
+     * @param setTo null = 只查询；true/false = 写入
+     * @return 查询时返回当前状态；写入时返回是否成功；provider 不可用返回 null
+     */
+    fun huaweiSetAutoStart(context: Context, setTo: Boolean?): Boolean? {
+        if (!isHuawei()) return null
+        return runCatching {
+            val uri = Uri.parse("content://com.huawei.systemmanager.provider.startup.syscfg")
+            val bundle = android.os.Bundle().apply {
+                putString("package", context.packageName)
+                // 空字符串表示应用级（而非某个具体启动组件）
+                putString("class", "")
+                if (setTo != null) {
+                    // 该 provider 同时接受 int 与 boolean 两种写法，都塞进去提高兼容性
+                    putInt("bootStatus", if (setTo) 1 else 0)
+                    putBoolean("BootStatus", setTo)
+                }
+            }
+            val resolver = context.contentResolver
+            if (setTo == null) {
+                val res = resolver.call(uri, "getStartupInfo", null, bundle) ?: return null
+                val status = res.getInt("bootStatus", res.getBoolean("BootStatus", false).let { if (it) 1 else 0 })
+                status == 1
+            } else {
+                // 无返回值，调用不抛异常即视为成功
+                resolver.call(uri, "setStartupInfo", null, bundle)
+                true
+            }
+        }.getOrNull()
+    }
+
+    /** 当前设备是否为华为 / 荣耀（自启动 provider 只在这两个品牌上存在） */
+    private fun isHuawei(): Boolean {
+        val brand = (Build.MANUFACTURER + " " + Build.BRAND).lowercase(Locale.ROOT)
+        return brand.contains("huawei") || brand.contains("honor")
     }
 
     /**
@@ -591,6 +661,54 @@ object Reminder {
             context.getSystemService(NotificationManager::class.java)
                 .cancel(notificationId(date, hour))
         }
+    }
+
+    // ---------- 权限状态汇总 ----------
+
+    /**
+     * 后台可靠性相关权限的状态快照，供设置页逐项展示与请求。
+     *
+     * 说明：Android 并没有「自启动权限」这个可申请项——自启动是国产 ROM
+     * 自带的管控开关，只能由用户在厂商设置页里手动打开，应用无法通过任何
+     * API 请求。但通知权限、精确闹钟权限、电池优化白名单这三项是**真正的
+     * 系统权限**，应用可以也必须主动请求，否则提醒会静默失效。
+     * 此前设置页只展示文案、从不发起请求，用户看到的就是「没请求任何权限」。
+     */
+    data class PermissionStatus(
+        val notifications: Boolean,
+        val exactAlarm: Boolean,
+        val ignoringBattery: Boolean
+    )
+
+    fun permissionStatus(context: Context): PermissionStatus = PermissionStatus(
+        notifications = hasNotificationPermission(context),
+        exactAlarm = canScheduleExactAlarms(context),
+        ignoringBattery = isIgnoringBatteryOptimizations(context)
+    )
+
+    /** Android 13+ 才有 POST_NOTIFICATIONS 运行时权限；低于 33 视为已授予 */
+    fun needsNotificationPermission(context: Context): Boolean =
+        Build.VERSION.SDK_INT >= 33 && !hasNotificationPermission(context)
+
+    /**
+     * 跳转到「精确闹钟」授权页。
+     * API 31+ 用 ACTION_REQUEST_SCHEDULE_EXACT_ALARM；
+     * 部分 ROM 该 action 不可达，退回应用详情页。
+     */
+    fun requestExactAlarmPermission(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < 31) return true
+        fun tryStart(intent: Intent) = runCatching {
+            context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }.isSuccess
+        if (tryStart(
+                Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+                    .setData(Uri.parse("package:${context.packageName}"))
+            )
+        ) return true
+        return tryStart(
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                .setData(Uri.parse("package:${context.packageName}"))
+        )
     }
 
     // ---------- 电池优化 ----------
