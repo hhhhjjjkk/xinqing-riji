@@ -13,6 +13,10 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.zIndex
 import kotlin.math.roundToInt
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector1D
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.material3.Slider
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.IconButton
@@ -38,6 +42,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -990,6 +995,26 @@ fun MoodEditorDialog(
     // 每行的高度（id → px）。只在 onGloballyPositioned 里写入、
     // 只在手势回调里读取，不参与组合，因此不会引起额外重组。
     val rowHeights = remember { HashMap<Int, Float>() }
+    // 每行的「让位动画」偏移量（id → Animatable）。
+    // 换位时静止的行不能瞬间跳到新槽位，而是由这里平滑滑过去：
+    // 换位那一刻给该行一个等于「它即将移动距离」的反向偏移，
+    // 再动画归零，视觉上就是从旧位置滑动到新位置。
+    //
+    // 注意：读取用 remember(id) 惰性建一次，不在组合中写 state map——
+    // 在组合期 getOrPut 写 mutableStateMapOf 会触发
+    // "Writing to state during composition" 的坏味道（重组循环风险）。
+    val rowShifts = remember { mutableStateMapOf<Int, Animatable<Float, AnimationVector1D>>() }
+    val scope = rememberCoroutineScope()
+    // 换位动画：让 id 这一行从「旧位置」滑到「新槽位」。
+    // 换位已完成、布局已把它放到新槽位，所以它此刻视觉上应当还停在
+    // 旧位置 = 新槽位 + (-移动距离)。把 initial 设成这个差值再归零即可。
+    fun slideBy(id: Int, fromOffset: Float) {
+        val a = rowShifts.getOrPut(id) { Animatable(0f) }
+        scope.launch {
+            a.snapTo(fromOffset)
+            a.animateTo(0f, tween(durationMillis = 180, easing = FastOutSlowInEasing))
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onClose,
@@ -1008,6 +1033,12 @@ fun MoodEditorDialog(
                     // 拖拽在第一次换位的瞬间就断掉。key 让节点跟随心情移动。
                     key(m.id) {
                     val isDragging = draggingId == m.id
+                    // 让位动画值：非拖动的行换位后从这里平滑归零。
+                    // 用 remember(id) 惰性创建，避免在组合期写 state map。
+                    val shift = remember(m.id) {
+                        rowShifts.getOrPut(m.id) { Animatable(0f) }
+                    }
+                    val shiftY = shift.value
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -1018,8 +1049,9 @@ fun MoodEditorDialog(
                             // graphicsLayer 必须在 clip 之前：clip 会裁掉其后所有
                             // 绘制内容，若放在前面，被拖行的平移会被裁在原位圆角内
                             .graphicsLayer {
+                                // 被拖的行跟手；其余行叠加让位动画，换位时平滑滑动
+                                translationY = if (isDragging) dragOffsetY else shiftY
                                 if (isDragging) {
-                                    translationY = dragOffsetY
                                     // 拾起感：轻微放大 + 压一点透明度
                                     scaleX = 1.02f
                                     scaleY = 1.02f
@@ -1047,11 +1079,17 @@ fun MoodEditorDialog(
                                         if (idx >= 0) {
                                             // 向下越过下一行中点：与下一行换位
                                             if (newOffset > 0 && idx < draft.lastIndex) {
-                                                val belowH = rowHeights[draft[idx + 1].id]
+                                                val belowId = draft[idx + 1].id
+                                                val belowH = rowHeights[belowId]
                                                 if (belowH != null && newOffset > (myH + belowH) / 2f) {
                                                     draft = draft.toMutableList().apply {
                                                         add(idx, removeAt(idx + 1))
                                                     }
+                                                    // 让位动画：下一行原本在下方，
+                                                    // 换位后槽位上移了 (myH+belowH)，
+                                                    // 所以给它一个 +正距离 的反向偏移，
+                                                    // 再动画归零 → 视觉上从原位置向上滑入
+                                                    slideBy(belowId, myH + belowH)
                                                     // 换位后布局槽位下移了 belowH，
                                                     // 抵消掉才能保持手指下的位置连续
                                                     newOffset = newOffset - belowH
@@ -1061,11 +1099,15 @@ fun MoodEditorDialog(
                                             // 向上越过上一行中点：与上一行换位
                                             // （idx 已在上方换位后重算，不会用过期下标）
                                             if (newOffset < 0 && idx > 0) {
-                                                val aboveH = rowHeights[draft[idx - 1].id]
+                                                val aboveId = draft[idx - 1].id
+                                                val aboveH = rowHeights[aboveId]
                                                 if (aboveH != null && -newOffset > (myH + aboveH) / 2f) {
                                                     draft = draft.toMutableList().apply {
                                                         add(idx - 1, removeAt(idx))
                                                     }
+                                                    // 同理：上一行原本在上方，
+                                                    // 换位后槽位下移，给它负向反向偏移
+                                                    slideBy(aboveId, -(myH + aboveH))
                                                     newOffset = newOffset + aboveH
                                                     idx -= 1
                                                 }
@@ -1078,11 +1120,16 @@ fun MoodEditorDialog(
                                         dragOffsetY = newOffset
                                     },
                                     onDragEnd = {
+                                        // 松手时若还残留位移（尚未越过下一行中点，
+                                        // 因此没触发换位），直接归零会让行瞬间弹回；
+                                        // 改为平滑滑回槽位，与让位动画观感一致。
+                                        slideBy(m.id, dragOffsetY)
                                         draggingId = null
                                         dragOffsetY = 0f
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     },
                                     onDragCancel = {
+                                        slideBy(m.id, dragOffsetY)
                                         draggingId = null
                                         dragOffsetY = 0f
                                     }
