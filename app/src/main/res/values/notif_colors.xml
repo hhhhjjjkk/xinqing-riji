@@ -9,4 +9,11 @@
     <color name="notif_header">#661B1B1F</color>
     <!-- 卡片底部引导小字 -->
     <color name="notif_footer">#8A1B1B1F</color>
+
+    <!-- 卡片容器底色（浅色：接近白色的半透明）与描边 -->
+    <color name="notif_card_bg">#F2FFFFFF</color>
+    <color name="notif_card_border">#1A1B1F</color>
+    <!-- 心情按钮底色与描边（浅色：白底细灰边，从卡片底色上浮起来） -->
+    <color name="notif_btn_fill">#E6FFFFFF</color>
+    <color name="notif_btn_border">#1A000000</color>
 </resources>

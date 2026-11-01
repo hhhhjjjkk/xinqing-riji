@@ -5,4 +5,14 @@
     <color name="notif_subtitle">#B3FFFFFF</color>
     <color name="notif_label">#CCFFFFFF</color>
     <color name="notif_btn_bg">#24FFFFFF</color>
+    <!-- 卡片头部 / 底部小字：深色下用更淡的白色 -->
+    <color name="notif_header">#99FFFFFF</color>
+    <color name="notif_footer">#B8FFFFFF</color>
+
+    <!-- 卡片容器底色（深色：比系统面板更深的半透明黑）与描边（浅白细边） -->
+    <color name="notif_card_bg">#E6000000</color>
+    <color name="notif_card_border">#33FFFFFF</color>
+    <!-- 心情按钮底色与描边（深色：半透明白字下的深灰钮，用浅白描边托出边界） -->
+    <color name="notif_btn_fill">#2625252B</color>
+    <color name="notif_btn_border">#26FFFFFF</color>
 </resources>
