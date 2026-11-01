@@ -4,33 +4,39 @@
 
   折叠态的通知内容区高度只有约 64dp，若直接复用展开态的高布局
   （标题 + 副标题 + 按钮区）会被系统裁掉，表现为部分心情图标看不见。
-  因此折叠态这里只放一行表情，高度可控。
+  因此折叠态这里只放一行心情药丸，高度可控。
 
   5 个槽位的表情与点击目标由 Reminder.sendNotification 运行时填充。
+  美化：整块套圆角卡片背景，按钮做成白色「药丸」（与展开态一致）。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="horizontal"
-    android:paddingTop="6dp"
-    android:paddingBottom="6dp">
+    android:background="@drawable/notification_card_bg"
+    android:paddingStart="10dp"
+    android:paddingEnd="10dp"
+    android:paddingTop="8dp"
+    android:paddingBottom="8dp">
 
     <LinearLayout
         android:id="@+id/c_btn_0"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_weight="1"
+        android:layout_marginEnd="5dp"
         android:gravity="center"
         android:orientation="vertical"
-        android:paddingTop="4dp"
-        android:paddingBottom="4dp"
+        android:paddingTop="5dp"
+        android:paddingBottom="5dp"
         android:background="@drawable/notification_mood_bg">
 
         <TextView
             android:id="@+id/c_emoji_0"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="22sp"
+            android:textSize="23sp"
+            android:includeFontPadding="false"
             android:singleLine="true" />
     </LinearLayout>
 
@@ -39,18 +45,19 @@
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_weight="1"
-        android:layout_marginStart="6dp"
+        android:layout_marginEnd="5dp"
         android:gravity="center"
         android:orientation="vertical"
-        android:paddingTop="4dp"
-        android:paddingBottom="4dp"
+        android:paddingTop="5dp"
+        android:paddingBottom="5dp"
         android:background="@drawable/notification_mood_bg">
 
         <TextView
             android:id="@+id/c_emoji_1"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="22sp"
+            android:textSize="23sp"
+            android:includeFontPadding="false"
             android:singleLine="true" />
     </LinearLayout>
 
@@ -59,18 +66,19 @@
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_weight="1"
-        android:layout_marginStart="6dp"
+        android:layout_marginEnd="5dp"
         android:gravity="center"
         android:orientation="vertical"
-        android:paddingTop="4dp"
-        android:paddingBottom="4dp"
+        android:paddingTop="5dp"
+        android:paddingBottom="5dp"
         android:background="@drawable/notification_mood_bg">
 
         <TextView
             android:id="@+id/c_emoji_2"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="22sp"
+            android:textSize="23sp"
+            android:includeFontPadding="false"
             android:singleLine="true" />
     </LinearLayout>
 
@@ -79,18 +87,19 @@
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_weight="1"
-        android:layout_marginStart="6dp"
+        android:layout_marginEnd="5dp"
         android:gravity="center"
         android:orientation="vertical"
-        android:paddingTop="4dp"
-        android:paddingBottom="4dp"
+        android:paddingTop="5dp"
+        android:paddingBottom="5dp"
         android:background="@drawable/notification_mood_bg">
 
         <TextView
             android:id="@+id/c_emoji_3"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="22sp"
+            android:textSize="23sp"
+            android:includeFontPadding="false"
             android:singleLine="true" />
     </LinearLayout>
 
@@ -99,18 +108,18 @@
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_weight="1"
-        android:layout_marginStart="6dp"
         android:gravity="center"
         android:orientation="vertical"
-        android:paddingTop="4dp"
-        android:paddingBottom="4dp"
+        android:paddingTop="5dp"
+        android:paddingBottom="5dp"
         android:background="@drawable/notification_mood_bg">
 
         <TextView
             android:id="@+id/c_emoji_4"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="22sp"
+            android:textSize="23sp"
+            android:includeFontPadding="false"
             android:singleLine="true" />
     </LinearLayout>
 </LinearLayout>

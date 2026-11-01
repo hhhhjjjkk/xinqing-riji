@@ -527,7 +527,7 @@ object Reminder {
         views.setTextViewText(R.id.notification_title, "此刻心情怎么样？")
         views.setTextViewText(
             R.id.notification_subtitle,
-            "点一个表情，记录 ${String.format(Locale.CHINA, "%02d:00", hour)} 的心情"
+            "${String.format(Locale.CHINA, "%02d:00", hour)} · 点一个表情记录当下的心情"
         )
 
         // 按当前心情目录填充槽位（不再是写死的 5 个内置心情）：

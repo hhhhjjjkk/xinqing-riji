@@ -2,7 +2,11 @@
 <!-- 通知文字颜色（浅色通知面板）：用深色文字，否则白字在浅底上看不见 -->
 <resources>
     <color name="notif_title">#FF1B1B1F</color>
-    <color name="notif_subtitle">#B31B1B1F</color>
-    <color name="notif_label">#CC1B1B1F</color>
+    <color name="notif_subtitle">#991B1B1F</color>
+    <color name="notif_label">#A61B1B1F</color>
     <color name="notif_btn_bg">#14000000</color>
+    <!-- 卡片头部的小字（应用名），比正文更浅 -->
+    <color name="notif_header">#661B1B1F</color>
+    <!-- 卡片底部引导小字 -->
+    <color name="notif_footer">#8A1B1B1F</color>
 </resources>
