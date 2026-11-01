@@ -618,8 +618,8 @@ object Reminder {
     /**
      * 通知里点了表情：直接写库，不跳转 app。
      *
-     * date 来自发通知时的 extras（见 [EXTRA_DATE]），不能在点击时重新取 now()——
-     * 23:00 的通知在 00:05 被点击时，按 now() 会把记录写到新的一天。
+     * hour/dateStr 由调用方传入——接收器传的是**用户点击的时刻**，
+     * 记录反映「用户什么时候点下的」，而非通知发送的整点。
      *
      * 原实现用 runBlocking + OnConflictStrategy.ABORT 有两个问题：
      * - runBlocking 挂在广播主线程上，磁盘慢时直接 ANR；
@@ -627,6 +627,9 @@ object Reminder {
      *   且无人捕获，进程崩溃、通知也取消不掉。
      * 现改为：冲突时按「最后写入胜出」回退为 update（快速记录语义上就该覆盖），
      * 并把所有异常兜住——记录失败也不能崩掉接收器进程。
+     *
+     * 注：取消通知不在此方法内，由调用方用「发通知时刻」单独调用
+     * [cancelQuickNotification]（通知 id 以发通知那天的 dayOfYear 计算）。
      */
     fun recordQuickMood(context: Context, hour: Int, moodId: Int, dateStr: String) {
         val db = MoodDatabase.get(context)
@@ -654,8 +657,14 @@ object Reminder {
         } catch (e: Exception) {
             android.util.Log.e("MoodReminder", "快速记录失败（$dateStr $hour 点）", e)
         }
+    }
 
-        // 取消通知：已记录，不再需要提醒。id 用发通知那天算，与 notify 时一致。
+    /**
+     * 取消某条快速记录通知。date/hour 必须传「发通知时」的那个值
+     * （来自 EXTRA_DATE/EXTRA_HOUR），而不是点击时刻——通知 id 是用
+     * 发通知那天的 dayOfYear 算的，传错就取消不到。
+     */
+    fun cancelQuickNotification(context: Context, hour: Int, dateStr: String) {
         runCatching {
             val date = java.time.LocalDate.parse(dateStr)
             context.getSystemService(NotificationManager::class.java)
