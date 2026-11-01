@@ -389,8 +389,6 @@ var moodEpoch: Int by mutableStateOf(0)
 
 class MainActivity : ComponentActivity() {
     private val openHour = mutableStateOf<Int?>(null)
-    /** 通知对应的日期（发通知那天）。点击在午夜后时不能用 LocalDate.now() */
-    private val openDate = mutableStateOf<LocalDate?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -435,7 +433,6 @@ class MainActivity : ComponentActivity() {
             ) {
                 MoodDiaryApp(
                     openHour = openHour,
-                    openDate = openDate,
                     settingsStore = store,
                     startTab = settings.startTab.index()
                 )
@@ -448,13 +445,10 @@ class MainActivity : ComponentActivity() {
         readOpenExtras(intent)
     }
 
-    /** 从通知跳转的 intent 中读取目标小时与日期（旧版通知无日期，退回今天） */
+    /** 从通知跳转的 intent 中读取信号，标记需要打开记录弹窗 */
     private fun readOpenExtras(intent: Intent) {
         intent.getIntExtra(EXTRA_HOUR, -1).takeIf { it >= 0 }?.let { h ->
             openHour.value = h
-            openDate.value = intent.getStringExtra(EXTRA_DATE)
-                ?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
-                ?: LocalDate.now()
             // 用完立即从 intent 上清掉：否则旋转等配置变化触发 onCreate
             // 时会再次读取，导致编辑弹窗在用户已关闭后又被重新打开
             intent.removeExtra(EXTRA_HOUR)
@@ -710,7 +704,6 @@ private data class PendingConflict(
 fun MoodDiaryApp(
     vm: MoodViewModel = androidx.lifecycle.viewmodel.compose.viewModel(),
     openHour: MutableState<Int?> = mutableStateOf(null),
-    openDate: MutableState<LocalDate?> = mutableStateOf(null),
     settingsStore: SettingsStore? = null,
     startTab: Int = 0
 ) {
@@ -728,14 +721,14 @@ fun MoodDiaryApp(
         editTarget = Triple(date, hour, entries.firstOrNull { it.date == date.toString() && it.hour == hour })
     }
 
-    // 点击通知跳转：直接打开对应小时的记录弹窗。
-    // 日期用「发通知那天」（openDate）：23:00 的通知拖到 00:30 才点，
-    // 若用 LocalDate.now() 编辑器会开到次日，保存后记录落在错误的日期上。
+    // 点击通知跳转：直接打开记录弹窗。
+    // 记录的时刻 = 用户点击的时刻（LocalDate.now() / LocalTime.now().hour），
+    // 而不是通知发出的那个整点/那天。即便 23:00 的通知拖到 00:30 才点，
+    // 弹窗也落在用户点击的当下，保存后记的是点击时刻。
     LaunchedEffect(openHour.value) {
-        openHour.value?.let { h ->
-            openEdit(openDate.value ?: LocalDate.now(), h)
+        openHour.value?.let {
+            openEdit(LocalDate.now(), LocalTime.now().hour)
             openHour.value = null
-            openDate.value = null
         }
     }
 
