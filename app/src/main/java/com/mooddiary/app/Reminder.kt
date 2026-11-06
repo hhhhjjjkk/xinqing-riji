@@ -458,6 +458,15 @@ object Reminder {
 
         val hour = LocalTime.now().hour
 
+        // 暂停期检查：用户选择「连续几天不通知」期间不发通知，
+        // 但链式排程不能断——闹钟照常续上，到期自动恢复，无需任何干预。
+        val pausedUntil = SettingsStore(context).current().reminderPausedUntil
+        if (pausedUntil > System.currentTimeMillis()) {
+            schedule(context)
+            return "提醒已暂停（到 ${java.time.Instant.ofEpochMilli(pausedUntil)
+                .atZone(java.time.ZoneId.systemDefault()).toLocalDate()}），本次不提醒（已续排下一次）"
+        }
+
         if (QuietHours.isQuiet(SettingsStore(context).current(), hour)) {
             schedule(context)
             return "当前处于免打扰时段，本次不提醒（已续排下一次）"

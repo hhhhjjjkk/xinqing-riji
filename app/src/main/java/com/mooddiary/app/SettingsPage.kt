@@ -330,6 +330,72 @@ fun SettingsPage(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+
+            // —— 暂停提醒（连续几天不通知） ——
+            // 适用于「这几天不想被打扰，但不想关掉提醒」的场景：
+            // 暂停期间闹钟照常续排，到期自动恢复，开关状态保持不变。
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            val pausedUntil = settings.reminderPausedUntil
+            val paused = pausedUntil > System.currentTimeMillis()
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("暂停几天", fontWeight = FontWeight.Medium)
+                    Text(
+                        if (paused) {
+                            val remainDays =
+                                ((pausedUntil - System.currentTimeMillis()) / (24 * 60 * 60 * 1000L)) + 1
+                            "已暂停，还剩约 $remainDays 天（到 " +
+                                java.time.Instant.ofEpochMilli(pausedUntil)
+                                    .atZone(java.time.ZoneId.systemDefault())
+                                    .toLocalDate() + "）"
+                        } else {
+                            "连续几天不通知，到期自动恢复"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (paused) {
+                    TextButton(
+                        onClick = { store.resumeReminder() },
+                        modifier = Modifier.pressBounce(pressedScale = 0.94f)
+                    ) { Text("立即恢复") }
+                }
+            }
+            if (settings.reminderEnabled) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { store.pauseReminder(1) },
+                        enabled = !paused,
+                        modifier = Modifier.weight(1f).pressBounce(pressedScale = 0.94f)
+                    ) { Text("1 天") }
+                    OutlinedButton(
+                        onClick = { store.pauseReminder(3) },
+                        enabled = !paused,
+                        modifier = Modifier.weight(1f).pressBounce(pressedScale = 0.94f)
+                    ) { Text("3 天") }
+                    OutlinedButton(
+                        onClick = { store.pauseReminder(7) },
+                        enabled = !paused,
+                        modifier = Modifier.weight(1f).pressBounce(pressedScale = 0.94f)
+                    ) { Text("7 天") }
+                }
+                if (paused) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "暂停期间整点不发通知，记录与提醒开关不受影响；到期自动恢复。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         }
 
         // 提醒可靠性

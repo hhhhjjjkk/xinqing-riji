@@ -89,7 +89,14 @@ data class AppSettings(
     /** 深色模式下使用纯黑背景（OLED 更省电） */
     val pureBlack: Boolean = false,
     /** 日历格子上显示心情表情 */
-    val calendarShowEmoji: Boolean = true
+    val calendarShowEmoji: Boolean = true,
+    /**
+     * 提醒暂停截止时刻（epoch 毫秒）。0 = 未暂停。
+     * 暂停期间闹钟照常续排、开关状态不变，只是整点不发通知；
+     * 到期自动恢复。用绝对时间戳存（而不是「剩余天数」），
+     * 重启后也不用重新计算。
+     */
+    val reminderPausedUntil: Long = 0
 )
 
 object QuietHours {
@@ -138,6 +145,7 @@ class SettingsStore(context: Context) {
         pureBlack = prefs.getBoolean(KEY_PURE_BLACK, false),
         calendarShowEmoji = prefs.getBoolean(KEY_CAL_EMOJI, true),
         reminderEnabled = prefs.getBoolean(KEY_REMINDER, false),
+        reminderPausedUntil = prefs.getLong(KEY_REMINDER_PAUSED_UNTIL, 0L),
         quietHoursEnabled = prefs.getBoolean(KEY_QUIET_ENABLED, false),
         quietStart = prefs.getInt(KEY_QUIET_START, 22),
         quietEnd = prefs.getInt(KEY_QUIET_END, 8),
@@ -169,6 +177,21 @@ class SettingsStore(context: Context) {
         commit { putBoolean(KEY_REMINDER, enabled) }
         Reminder.setEnabled(appContext, enabled)
     }
+
+    /**
+     * 暂停提醒 [days] 天：从现在起，到 now + days 天后的整点为止不发通知。
+     * 期间闹钟照常续排（链式不断），reminderEnabled 开关状态保持不变，
+     * 到期自动恢复，无需用户操作。
+     */
+    fun pauseReminder(days: Int) {
+        require(days in 1..30) { "pause days must be 1..30" }
+        commit { putLong(KEY_REMINDER_PAUSED_UNTIL, System.currentTimeMillis() + days * 24L * 60 * 60 * 1000) }
+    }
+
+    /** 立即结束暂停，恢复整点提醒 */
+    fun resumeReminder() {
+        commit { putLong(KEY_REMINDER_PAUSED_UNTIL, 0L) }
+    }
     fun setQuietHoursEnabled(enabled: Boolean) = commit { putBoolean(KEY_QUIET_ENABLED, enabled) }
     fun setQuietRange(start: Int, end: Int) {
         require(start in 0..23 && end in 0..23) { "hour must be 0..23" }
@@ -190,6 +213,8 @@ class SettingsStore(context: Context) {
         private const val KEY_THEME = "theme_mode"
         /** 提醒开关的存储键；Reminder 需读取同一真值，故公开 */
         const val KEY_REMINDER = "reminder_enabled"
+        /** 提醒暂停截止时刻（epoch 毫秒，0=未暂停）；onTick 需读取，故公开 */
+        const val KEY_REMINDER_PAUSED_UNTIL = "reminder_paused_until"
         private const val KEY_QUIET_ENABLED = "quiet_enabled"
         private const val KEY_QUIET_START = "quiet_start"
         private const val KEY_QUIET_END = "quiet_end"
