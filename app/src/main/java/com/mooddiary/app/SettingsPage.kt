@@ -95,6 +95,8 @@ fun SettingsPage(
     var hourPicker by remember { mutableStateOf<Pair<String, Int>?>(null) }
     // 自启动跳转结果：null = 还没点过；跳转失败时在页面上展开手动路径指引
     var autoStartResult by remember { mutableStateOf<Reminder.AutoStartResult?>(null) }
+    // 「自定义暂停天数」对话框是否打开
+    var pauseCustomOpen by remember { mutableStateOf(false) }
 
     // 通知权限请求器：提醒开关与权限状态面板都要用，因此提到最外层。
     // 授予后才真正把提醒打开——否则闹钟排了、每小时却静默不发。
@@ -143,10 +145,8 @@ fun SettingsPage(
                     )
                 }
             }
-        }
 
-        // 个性化：主题色 / 动态取色
-        SettingsSection("个性化", cornerDp = settings.cornerLevel.dp()) {
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
             SettingLabel("主题色")
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -247,47 +247,7 @@ fun SettingsPage(
             )
         }
 
-        // 启动与操作习惯
-        SettingsSection("启动与操作", cornerDp = settings.cornerLevel.dp()) {
-            SettingLabel("启动时打开")
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                StartTab.entries.forEach { t ->
-                    FilterChip(
-                        selected = settings.startTab == t,
-                        onClick = {
-                            store.setStartTab(t)
-                            android.widget.Toast.makeText(context, "启动时打开：${t.label()}", android.widget.Toast.LENGTH_SHORT).show()
-                        },
-                        label = { Text(t.label()) },
-                    modifier = Modifier.pressBounce(pressedScale = 0.94f)
-                    )
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-            SettingLabel("点日历某天时")
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
-                    selected = settings.calendarTapAction == CalendarTapAction.OPEN_DAY_BOARD,
-                    onClick = { store.setCalendarTapAction(CalendarTapAction.OPEN_DAY_BOARD) },
-                    label = { Text("展开 24 小时") },
-                modifier = Modifier.pressBounce(pressedScale = 0.94f)
-                )
-                FilterChip(
-                    selected = settings.calendarTapAction == CalendarTapAction.QUICK_LOG_NOW,
-                    onClick = { store.setCalendarTapAction(CalendarTapAction.QUICK_LOG_NOW) },
-                    label = { Text("直接记录此刻") },
-                modifier = Modifier.pressBounce(pressedScale = 0.94f)
-                )
-            }
-        }
-
-        // 提醒
+        // 提醒：日常设置（开关 / 免打扰 / 暂停 / 通知内容 / 测试）
         SettingsSection("提醒", cornerDp = settings.cornerLevel.dp()) {
             SwitchRow(
                 title = "每小时提醒",
@@ -334,58 +294,57 @@ fun SettingsPage(
             // —— 暂停提醒（连续几天不通知） ——
             // 适用于「这几天不想被打扰，但不想关掉提醒」的场景：
             // 暂停期间闹钟照常续排，到期自动恢复，开关状态保持不变。
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            val pausedUntil = settings.reminderPausedUntil
-            val paused = pausedUntil > System.currentTimeMillis()
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("暂停几天", fontWeight = FontWeight.Medium)
-                    Text(
-                        if (paused) {
-                            val remainDays =
-                                ((pausedUntil - System.currentTimeMillis()) / (24 * 60 * 60 * 1000L)) + 1
-                            "已暂停，还剩约 $remainDays 天（到 " +
-                                java.time.Instant.ofEpochMilli(pausedUntil)
-                                    .atZone(java.time.ZoneId.systemDefault())
-                                    .toLocalDate() + "）"
-                        } else {
-                            "连续几天不通知，到期自动恢复"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                if (paused) {
-                    TextButton(
-                        onClick = { store.resumeReminder() },
-                        modifier = Modifier.pressBounce(pressedScale = 0.94f)
-                    ) { Text("立即恢复") }
-                }
-            }
+            // 提醒本身没开时没有暂停的意义，整块不显示。
             if (settings.reminderEnabled) {
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                val pausedUntil = settings.reminderPausedUntil
+                val paused = pausedUntil > System.currentTimeMillis()
                 Row(
                     Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    OutlinedButton(
-                        onClick = { store.pauseReminder(1) },
-                        enabled = !paused,
-                        modifier = Modifier.weight(1f).pressBounce(pressedScale = 0.94f)
-                    ) { Text("1 天") }
-                    OutlinedButton(
-                        onClick = { store.pauseReminder(3) },
-                        enabled = !paused,
-                        modifier = Modifier.weight(1f).pressBounce(pressedScale = 0.94f)
-                    ) { Text("3 天") }
-                    OutlinedButton(
-                        onClick = { store.pauseReminder(7) },
-                        enabled = !paused,
-                        modifier = Modifier.weight(1f).pressBounce(pressedScale = 0.94f)
-                    ) { Text("7 天") }
+                    Column(Modifier.weight(1f)) {
+                        Text("暂停几天", fontWeight = FontWeight.Medium)
+                        Text(
+                            if (paused) {
+                                val remainMs = pausedUntil - System.currentTimeMillis()
+                                val remainDays = ((remainMs + 86_399_999L) / 86_400_000L).toInt().coerceAtLeast(1)
+                                "已暂停，还剩约 $remainDays 天（到 " +
+                                    java.time.Instant.ofEpochMilli(pausedUntil)
+                                        .atZone(java.time.ZoneId.systemDefault())
+                                        .toLocalDate() + "）"
+                            } else {
+                                "连续几天不通知，到期自动恢复"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (paused) {
+                        TextButton(
+                            onClick = { store.resumeReminder() },
+                            modifier = Modifier.pressBounce(pressedScale = 0.94f)
+                        ) { Text("立即恢复") }
+                    }
+                }
+                if (!paused) {
+                    Spacer(Modifier.height(6.dp))
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(1, 3, 7).forEach { d ->
+                            OutlinedButton(
+                                onClick = { store.pauseReminder(d) },
+                                modifier = Modifier.pressBounce(pressedScale = 0.94f)
+                            ) { Text("$d 天") }
+                        }
+                        OutlinedButton(
+                            onClick = { pauseCustomOpen = true },
+                            modifier = Modifier.pressBounce(pressedScale = 0.94f)
+                        ) { Text("自定义…") }
+                    }
                 }
                 if (paused) {
                     Spacer(Modifier.height(6.dp))
@@ -396,9 +355,74 @@ fun SettingsPage(
                     )
                 }
             }
+
+            // —— 通知里显示哪些心情 ——
+            if (settings.reminderEnabled) {
+                HorizontalDivider(Modifier.padding(vertical = 10.dp))
+                SettingLabel("通知里显示的心情")
+                Text(
+                    "最多 ${SettingsStore.NOTIFY_MOOD_MAX} 个。不选则自动使用分值最高的几个。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    moods.forEach { m ->
+                        val checked = settings.notifyMoodIds.contains(m.id)
+                        FilterChip(
+                            selected = checked,
+                            onClick = {
+                                val cur = settings.notifyMoodIds.toMutableList()
+                                if (checked) {
+                                    cur.remove(m.id)
+                                } else {
+                                    // 已达上限：先移除最早选的那个，再加入新的
+                                    if (cur.size >= SettingsStore.NOTIFY_MOOD_MAX) {
+                                        cur.removeAt(0)
+                                    }
+                                    cur.add(m.id)
+                                }
+                                store.setNotifyMoodIds(cur)
+                            },
+                            // 标注无法渲染的表情，便于定位「某个心情不显示」
+                            label = {
+                                Text("${m.emoji}${m.label}${if (!isEmojiRenderable(m.emoji)) " ⚠" else ""}")
+                            },
+                            modifier = Modifier.pressBounce(pressedScale = 0.94f)
+                        )
+                    }
+                }
+                if (settings.notifyMoodIds.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = { store.setNotifyMoodIds(emptyList()) }) {
+                        Text("恢复自动")
+                    }
+                }
+            }
+
+            // —— 测试通知 ——
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
+            Text(
+                "立即弹出一条测试通知，上面有表情可以直接点。\n点完会自动记录当前小时的心情，通知随即消失。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = {
+                    android.widget.Toast.makeText(context, "已发送测试通知", android.widget.Toast.LENGTH_SHORT).show()
+                    Reminder.sendNotification(context, java.time.LocalTime.now().hour)
+                },
+                modifier = Modifier.pressBounce(pressedScale = 0.94f)
+            ) {
+                Text("弹出测试通知")
+            }
         }
 
-        // 提醒可靠性
+        // 提醒可靠性：权限与排查（提醒不响时看这里）
         if (settings.reminderEnabled) {
             SettingsSection("提醒可靠性", cornerDp = settings.cornerLevel.dp()) {
                 // —— 权限状态面板 ——
@@ -446,14 +470,8 @@ fun SettingsPage(
                     onAction = { Reminder.openBatteryOptimizationSettings(context) }
                 )
 
-                Spacer(Modifier.height(14.dp))
-                HorizontalDivider(Modifier.padding(bottom = 12.dp))
-
                 // —— 自启动 ——
-                // 用户会期待一个「请求自启动权限」的按钮。这里必须把事实讲清楚：
-                // Android 权限模型里根本没有「自启动」这一项，也没有对应 API。
-                // 之前页面把按钮写成「① 开启「自启动」权限」，暗示应用能申请它，
-                // 用户点了没生效自然认为功能坏了——问题出在措辞误导，不是功能缺失。
+                HorizontalDivider(Modifier.padding(vertical = 12.dp))
                 SettingLabel("自启动")
                 Text(
                     "「自启动」不是一个 Android 权限，系统里没有可申请的开关，应用无法像申请" +
@@ -509,9 +527,6 @@ fun SettingsPage(
                     }
                     null -> Unit
                 }
-                Spacer(Modifier.height(14.dp))
-                HorizontalDivider(Modifier.padding(bottom = 12.dp))
-
                 // 手动路径始终显示：即使成功跳到厂商页，用户也常常在那一堆开关里
                 // 找不到「自启动」到底在哪（尤其是把自启动藏在「应用启动管理」
                 // 或「耗电管理」里的 ROM）。
@@ -522,31 +537,14 @@ fun SettingsPage(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                Text(
-                    "已使用精确闹钟。正常情况下重启手机后会自动恢复；若系统清除了提醒，重新打开 app 也会自动恢复。\n通知里可直接点表情快速记录，不用打开 app。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                if (!ignoringBattery) {
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        "为什么在应用里测试正常、到了整点却不响：\n" +
-                            "部分手机在「最近任务」里划掉本应用或清理后台后，会清除已注册的闹钟并限制后台运行；" +
-                            "清除期间应用无法唤醒。重新打开 app 会自动恢复排程。" +
-                            "若希望不手动打开也能及时提醒，请按上面的「电池优化白名单」放行后台运行。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-
-                // —— 模拟整点触发（诊断） ——
+                // —— 诊断提醒 ——
                 // 不用等到整点：直接走一遍完整的触发逻辑（含续排），
                 // 把「做了什么/为什么没发」显示出来，一眼看出断在哪一环。
-                HorizontalDivider(Modifier.padding(vertical = 10.dp))
+                HorizontalDivider(Modifier.padding(vertical = 12.dp))
                 SettingLabel("诊断提醒")
                 Text(
                     "不用等到整点，立即按真实流程走一遍：会检查开关、权限、" +
-                        "免打扰与当日记录，并把结果与下一步排程显示出来。",
+                        "免打扰、暂停与当日记录，并把结果与下一步排程显示出来。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -571,76 +569,6 @@ fun SettingsPage(
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
-                Spacer(Modifier.height(12.dp))
-
-                // —— 通知里显示哪些心情 ——
-                // 通知布局只有 5 个槽位，心情较多时原先按分值截断，
-                // 导致部分心情的图标不会出现在通知里。
-                // 这里让用户自己勾选，并明确提示上限。
-                HorizontalDivider(Modifier.padding(vertical = 10.dp))
-                SettingLabel("通知里显示的心情")
-                Text(
-                    "最多 ${SettingsStore.NOTIFY_MOOD_MAX} 个（展开通知可显示两行）。" +
-                        "不选则自动使用分值最高的几个。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(8.dp))
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    moods.forEach { m ->
-                        val checked = settings.notifyMoodIds.contains(m.id)
-                        FilterChip(
-                            selected = checked,
-                            onClick = {
-                                val cur = settings.notifyMoodIds.toMutableList()
-                                if (checked) {
-                                    cur.remove(m.id)
-                                } else {
-                                    // 已达上限：先移除最早选的那个，再加入新的
-                                    // 用统一常量，避免上限在多处各写一遍
-                                    if (cur.size >= SettingsStore.NOTIFY_MOOD_MAX) {
-                                        cur.removeAt(0)
-                                    }
-                                    cur.add(m.id)
-                                }
-                                store.setNotifyMoodIds(cur)
-                            },
-                            // 标注无法渲染的表情，便于定位「某个心情不显示」
-                            label = {
-                                Text("${m.emoji}${m.label}${if (!isEmojiRenderable(m.emoji)) " ⚠" else ""}")
-                            },
-                            modifier = Modifier.pressBounce(pressedScale = 0.94f)
-                        )
-                    }
-                }
-                if (settings.notifyMoodIds.isNotEmpty()) {
-                    Spacer(Modifier.height(8.dp))
-                    TextButton(onClick = { store.setNotifyMoodIds(emptyList()) }) {
-                        Text("恢复自动")
-                    }
-                }
-            }
-        }
-
-        // 测试通知：立即弹出一条带表情的通知，方便验证设置是否生效
-        SettingsSection("测试", cornerDp = settings.cornerLevel.dp()) {
-            Text(
-                "立即弹出一条测试通知，上面有 5 个表情可以直接点。\n点完会自动记录当前小时的心情，通知随即消失。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(10.dp))
-            OutlinedButton(
-                onClick = {
-                    android.widget.Toast.makeText(context, "已发送测试通知", android.widget.Toast.LENGTH_SHORT).show()
-                    Reminder.sendNotification(context, java.time.LocalTime.now().hour)
-                },
-                modifier = Modifier.pressBounce(pressedScale = 0.94f)
-            ) {
-                Text("立即弹出测试通知")
             }
         }
 
@@ -699,7 +627,7 @@ fun SettingsPage(
         }
 
         // 日历
-        SettingsSection("日历", cornerDp = settings.cornerLevel.dp()) {
+        SettingsSection("日历与启动", cornerDp = settings.cornerLevel.dp()) {
             SwitchRow(
                 title = "格子里显示心情表情",
                 subtitle = "关闭后日历只显示日期，界面更清爽",
@@ -731,6 +659,49 @@ fun SettingsPage(
                     label = { Text("周一") },
                 modifier = Modifier.pressBounce(pressedScale = 0.94f)
                 )
+            }
+
+            // —— 点日历某天时 ——
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
+            SettingLabel("点日历某天时")
+            Spacer(Modifier.height(8.dp))
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = settings.calendarTapAction == CalendarTapAction.OPEN_DAY_BOARD,
+                    onClick = { store.setCalendarTapAction(CalendarTapAction.OPEN_DAY_BOARD) },
+                    label = { Text("展开 24 小时") },
+                    modifier = Modifier.pressBounce(pressedScale = 0.94f)
+                )
+                FilterChip(
+                    selected = settings.calendarTapAction == CalendarTapAction.QUICK_LOG_NOW,
+                    onClick = { store.setCalendarTapAction(CalendarTapAction.QUICK_LOG_NOW) },
+                    label = { Text("直接记录此刻") },
+                    modifier = Modifier.pressBounce(pressedScale = 0.94f)
+                )
+            }
+
+            // —— 启动时打开 ——
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
+            SettingLabel("启动时打开")
+            Spacer(Modifier.height(8.dp))
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                StartTab.entries.forEach { t ->
+                    FilterChip(
+                        selected = settings.startTab == t,
+                        onClick = {
+                            store.setStartTab(t)
+                            android.widget.Toast.makeText(context, "启动时打开：${t.label()}", android.widget.Toast.LENGTH_SHORT).show()
+                        },
+                        label = { Text(t.label()) },
+                        modifier = Modifier.pressBounce(pressedScale = 0.94f)
+                    )
+                }
             }
         }
 
@@ -781,6 +752,19 @@ fun SettingsPage(
                 hourPicker = null
                 if (which == "start") store.setQuietRange(h, settings.quietEnd)
                 else store.setQuietRange(settings.quietStart, h)
+            }
+        )
+    }
+
+    if (pauseCustomOpen) {
+        PauseDurationDialog(
+            onDismiss = { pauseCustomOpen = false },
+            onPick = { days ->
+                pauseCustomOpen = false
+                store.pauseReminder(days)
+                android.widget.Toast.makeText(
+                    context, "已暂停提醒 $days 天", android.widget.Toast.LENGTH_SHORT
+                ).show()
             }
         )
     }
@@ -993,6 +977,53 @@ private fun HourButton(
             Text(hourText(hour), fontWeight = FontWeight.Bold)
         }
     }
+}
+
+/**
+ * 自定义暂停天数：1-30 天。
+ *
+ * 用滑杆而不是输入框：天数是个连续的小范围值，滑杆一划就到、
+ * 不用弹键盘，误输入也不可能（输入框要额外处理空值/超范围/非数字）。
+ */
+@Composable
+private fun PauseDurationDialog(
+    onDismiss: () -> Unit,
+    onPick: (Int) -> Unit
+) {
+    var days by remember { mutableIntStateOf(3) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("暂停几天") },
+        text = {
+            Column {
+                Text(
+                    "暂停期间整点不发通知，到期自动恢复。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(16.dp))
+                Text("$days 天", fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                Spacer(Modifier.height(8.dp))
+                Slider(
+                    value = days.toFloat(),
+                    onValueChange = { days = it.roundToInt().coerceIn(1, 30) },
+                    valueRange = 1f..30f,
+                    steps = 28    // 1..30 之间有 28 个中间刻度，保证只能落在整数天
+                )
+                Text(
+                    "1 到 30 天",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onPick(days) }) { Text("暂停 $days 天") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
 }
 
 @Composable
