@@ -19,9 +19,11 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -1084,10 +1086,13 @@ fun FloatingNavBar(
                 animate(
                     initialValue = pillX,
                     targetValue = target,
-                    animationSpec = spring(
-                        // 带回弹的阻尼：松手落地时有一点 Q 弹
-                        dampingRatio = Spring.DampingRatioLowBouncy,
-                        stiffness = Spring.StiffnessMedium
+                    // 切换标签时椭圆的水平移动：用非线性的缓动曲线。
+                    // FastOutSlowInEasing 是 Material 标准动效——先加速再减速、
+                    // 快到目标时放缓"滑入"落定，比纯线性滑动更有质感，
+                    // 也不会像之前的 spring 那样带回弹的轻微抖动。
+                    animationSpec = tween(
+                        durationMillis = 280,
+                        easing = FastOutSlowInEasing
                     )
                 ) { v, _ -> pillX = v }
             }
