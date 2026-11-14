@@ -97,6 +97,8 @@ fun SettingsPage(
     var autoStartResult by remember { mutableStateOf<Reminder.AutoStartResult?>(null) }
     // 「自定义暂停天数」对话框是否打开
     var pauseCustomOpen by remember { mutableStateOf(false) }
+    // 「编辑快捷天数」对话框是否打开
+    var quickDaysEditOpen by remember { mutableStateOf(false) }
 
     // 通知权限请求器：提醒开关与权限状态面板都要用，因此提到最外层。
     // 授予后才真正把提醒打开——否则闹钟排了、每小时却静默不发。
@@ -330,11 +332,13 @@ fun SettingsPage(
                 }
                 if (!paused) {
                     Spacer(Modifier.height(6.dp))
+                    // 快捷天数由用户配置（默认 1/3/7），末尾「自定义…」选任意天数，
+                    // 「编辑」可增删快捷按钮本身。
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        listOf(1, 3, 7).forEach { d ->
+                        settings.pauseQuickDays.forEach { d ->
                             OutlinedButton(
                                 onClick = { store.pauseReminder(d) },
                                 modifier = Modifier.pressBounce(pressedScale = 0.94f)
@@ -345,6 +349,11 @@ fun SettingsPage(
                             modifier = Modifier.pressBounce(pressedScale = 0.94f)
                         ) { Text("自定义…") }
                     }
+                    Spacer(Modifier.height(6.dp))
+                    TextButton(
+                        onClick = { quickDaysEditOpen = true },
+                        modifier = Modifier.pressBounce(pressedScale = 0.94f)
+                    ) { Text("编辑快捷天数") }
                 }
                 if (paused) {
                     Spacer(Modifier.height(6.dp))
@@ -353,6 +362,40 @@ fun SettingsPage(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+
+                // —— 固定不提醒的星期几 ——
+                // 与「暂停几天」相互独立：一个是连续静音一段时间，
+                // 一个是每周固定的某几天静音（比如周末不想被打扰）。
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                Text("固定不提醒的日子", fontWeight = FontWeight.Medium)
+                Text(
+                    if (settings.reminderSkipDays.isEmpty()) "未选择（每周每天都提醒）"
+                    else "每周这些天不提醒：${
+                        settings.reminderSkipDays.sorted()
+                            .joinToString("、") { DOW_LABELS[it] ?: "" }
+                    }",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    (1..7).forEach { dow ->
+                        val selected = dow in settings.reminderSkipDays
+                        FilterChip(
+                            selected = selected,
+                            onClick = {
+                                val next = settings.reminderSkipDays.toMutableSet()
+                                if (selected) next.remove(dow) else next.add(dow)
+                                store.setReminderSkipDays(next)
+                            },
+                            label = { Text(DOW_LABELS[dow] ?: "") },
+                            modifier = Modifier.pressBounce(pressedScale = 0.94f)
+                        )
+                    }
                 }
             }
 
@@ -769,6 +812,17 @@ fun SettingsPage(
         )
     }
 
+    if (quickDaysEditOpen) {
+        QuickDaysEditDialog(
+            current = settings.pauseQuickDays,
+            onDismiss = { quickDaysEditOpen = false },
+            onSave = { days ->
+                quickDaysEditOpen = false
+                store.setPauseQuickDays(days)
+            }
+        )
+    }
+
     if (moodEditorOpen) {
         MoodEditorDialog(onClose = { moodEditorOpen = false })
     }
@@ -977,6 +1031,76 @@ private fun HourButton(
             Text(hourText(hour), fontWeight = FontWeight.Bold)
         }
     }
+}
+
+/** 星期几的中文标签，下标 = java.time.DayOfWeek.value（1=周一 … 7=周日） */
+private val DOW_LABELS = listOf("", "周一", "周二", "周三", "周四", "周五", "周六", "周日")
+
+/**
+ * 编辑快捷暂停天数：勾选要显示为按钮的天数（1-30，最多 5 个）。
+ * 用户点快捷按钮直接暂停对应天数，不用每次都开滑杆。
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun QuickDaysEditDialog(
+    current: List<Int>,
+    onDismiss: () -> Unit,
+    onSave: (List<Int>) -> Unit
+) {
+    val selected = remember { mutableStateListOf<Int>().apply { addAll(current) } }
+    val ctx = LocalContext.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("快捷天数") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    "勾选要显示为快捷按钮的天数（最多 5 个）。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(10.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    (1..30).forEach { d ->
+                        val checked = d in selected
+                        FilterChip(
+                            selected = checked,
+                            onClick = {
+                                if (checked) {
+                                    selected.remove(d)
+                                } else if (selected.size < 5) {
+                                    selected.add(d)
+                                } else {
+                                    android.widget.Toast.makeText(
+                                        ctx, "最多选 5 个",
+                                        android.widget.Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            },
+                            label = { Text("$d") },
+                            modifier = Modifier.pressBounce(pressedScale = 0.94f)
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    // 空选择退回默认，避免快捷区变成一片空白
+                    onSave(
+                        selected.sorted().ifEmpty { AppSettings.DEFAULT_PAUSE_QUICK_DAYS }
+                    )
+                }
+            ) { Text("保存") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
 }
 
 /**

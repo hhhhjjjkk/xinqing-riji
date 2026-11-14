@@ -96,8 +96,23 @@ data class AppSettings(
      * 到期自动恢复。用绝对时间戳存（而不是「剩余天数」），
      * 重启后也不用重新计算。
      */
-    val reminderPausedUntil: Long = 0
-)
+    val reminderPausedUntil: Long = 0,
+    /**
+     * 固定不提醒的星期几（DayOfWeek.value 1=周一 … 7=周日）。
+     * 空集 = 不启用。与 [reminderPausedUntil] 相互独立：
+     * 一个是「连续一段时间静音」，一个是「每周固定的某几天静音」。
+     */
+    val reminderSkipDays: Set<Int> = emptySet(),
+    /**
+     * 暂停功能里快捷按钮显示的天数（如 1/3/7），用户可自定义。
+     * 存成逗号分隔字符串；空则回退默认值。
+     */
+    val pauseQuickDays: List<Int> = DEFAULT_PAUSE_QUICK_DAYS
+) {
+    companion object {
+        val DEFAULT_PAUSE_QUICK_DAYS = listOf(1, 3, 7)
+    }
+}
 
 object QuietHours {
     fun isQuiet(start: Int, end: Int, hour: Int): Boolean =
@@ -146,6 +161,18 @@ class SettingsStore(context: Context) {
         calendarShowEmoji = prefs.getBoolean(KEY_CAL_EMOJI, true),
         reminderEnabled = prefs.getBoolean(KEY_REMINDER, false),
         reminderPausedUntil = prefs.getLong(KEY_REMINDER_PAUSED_UNTIL, 0L),
+        reminderSkipDays = (prefs.getString(KEY_REMINDER_SKIP_DAYS, null) ?: "")
+            .split(',')
+            .mapNotNull { it.trim().toIntOrNull() }
+            .filter { it in 1..7 }
+            .toSet(),
+        pauseQuickDays = (prefs.getString(KEY_PAUSE_QUICK_DAYS, null) ?: "")
+            .split(',')
+            .mapNotNull { it.trim().toIntOrNull() }
+            .filter { it in 1..30 }
+            .distinct()
+            .sorted()
+            .ifEmpty { AppSettings.DEFAULT_PAUSE_QUICK_DAYS },
         quietHoursEnabled = prefs.getBoolean(KEY_QUIET_ENABLED, false),
         quietStart = prefs.getInt(KEY_QUIET_START, 22),
         quietEnd = prefs.getInt(KEY_QUIET_END, 8),
@@ -192,6 +219,19 @@ class SettingsStore(context: Context) {
     fun resumeReminder() {
         commit { putLong(KEY_REMINDER_PAUSED_UNTIL, 0L) }
     }
+
+    /** 设置固定不提醒的星期几（1=周一 … 7=周日）；传空集表示不启用 */
+    fun setReminderSkipDays(days: Set<Int>) = commit {
+        putString(KEY_REMINDER_SKIP_DAYS, days.filter { it in 1..7 }.sorted().joinToString(","))
+    }
+
+    /** 设置暂停快捷天数按钮（1-30，去重排序，最多 5 个） */
+    fun setPauseQuickDays(days: List<Int>) = commit {
+        putString(
+            KEY_PAUSE_QUICK_DAYS,
+            days.filter { it in 1..30 }.distinct().sorted().take(5).joinToString(",")
+        )
+    }
     fun setQuietHoursEnabled(enabled: Boolean) = commit { putBoolean(KEY_QUIET_ENABLED, enabled) }
     fun setQuietRange(start: Int, end: Int) {
         require(start in 0..23 && end in 0..23) { "hour must be 0..23" }
@@ -215,6 +255,10 @@ class SettingsStore(context: Context) {
         const val KEY_REMINDER = "reminder_enabled"
         /** 提醒暂停截止时刻（epoch 毫秒，0=未暂停）；onTick 需读取，故公开 */
         const val KEY_REMINDER_PAUSED_UNTIL = "reminder_paused_until"
+        /** 固定不提醒的星期几（逗号分隔的 1..7） */
+        const val KEY_REMINDER_SKIP_DAYS = "reminder_skip_days"
+        /** 暂停快捷天数按钮（逗号分隔） */
+        private const val KEY_PAUSE_QUICK_DAYS = "pause_quick_days"
         private const val KEY_QUIET_ENABLED = "quiet_enabled"
         private const val KEY_QUIET_START = "quiet_start"
         private const val KEY_QUIET_END = "quiet_end"
