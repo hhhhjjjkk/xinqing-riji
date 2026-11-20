@@ -390,6 +390,11 @@ var moodEpoch: Int by mutableStateOf(0)
     private set
 
 class MainActivity : ComponentActivity() {
+    /**
+     * 通知跳转信号：非空 = 需要打开记录弹窗。
+     * ⚠️ 其数值就是通知的「发送 hour」，仅当存在性信号使用，
+     * 严禁当作目标小时传给 openEdit——那会让记录回到发送时刻。
+     */
     private val openHour = mutableStateOf<Int?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {

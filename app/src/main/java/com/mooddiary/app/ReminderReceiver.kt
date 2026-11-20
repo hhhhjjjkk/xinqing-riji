@@ -45,20 +45,25 @@ class ReminderReceiver : BroadcastReceiver() {
         val moodId = intent.getIntExtra(Reminder.EXTRA_MOOD_ID, 0)
         val hour = intent.getIntExtra(Reminder.EXTRA_HOUR, -1)
         val dateStr = intent.getStringExtra(Reminder.EXTRA_DATE)
-        if (moodId == 0 || hour < 0) return
+        if (moodId == 0) return
+
+        // 点击时刻必须在 onReceive 当场取：若挪到 IO 协程里再取，
+        // 协程调度可能跨过整点边界（如 15:59:59 点击、16:00:01 才执行），
+        // 记录就落到下一小时。当场取最接近真实点击瞬间。
+        val nowDate = java.time.LocalDate.now()
+        val nowHour = java.time.LocalTime.now().hour
 
         val pending = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                // 记录的时刻 = 用户点击的时刻，而不是通知发送的时刻。
-                // 用户希望记录反映「我是在什么时候点下这个心情的」，
-                // 即便收的是整点通知、拖到十几分钟后才点，也应记成点击当下。
+                // 记录的时刻 = 用户点击的时刻（上面当场捕获的），
+                // 而不是通知发送的时刻。
                 // （EXTRA_HOUR/EXTRA_DATE 仍是发送时刻，仅供下方取消通知定位用）
-                val nowDate = java.time.LocalDate.now()
-                val nowHour = java.time.LocalTime.now().hour
                 Reminder.recordQuickMood(context, nowHour, moodId, nowDate.toString())
-                // 取消那条通知：必须用「发送时刻」算出的通知 id 才能取消到
-                if (dateStr != null) {
+                // 取消那条通知：必须用「发送时刻」算出的通知 id 才能取消到。
+                // 极旧版本的通知没有这两个 extra（hour=-1）：跳过取消，
+                // 但记录照常写——绝不能因为缺定位信息就不记录。
+                if (dateStr != null && hour >= 0) {
                     Reminder.cancelQuickNotification(context, hour, dateStr)
                 }
             } catch (e: Throwable) {

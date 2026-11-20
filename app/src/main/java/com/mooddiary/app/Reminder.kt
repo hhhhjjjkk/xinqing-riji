@@ -545,9 +545,12 @@ object Reminder {
         val compact = RemoteViews(context.packageName, R.layout.notification_mood_compact)
         views.setTextColor(R.id.notification_title, accentArgb)
         views.setTextViewText(R.id.notification_title, "此刻心情怎么样？")
+        // 副标题不显示发送整点：记录落在「点击时刻」而非发送时刻，
+        // 若写着「14:00 · 记录此刻心情」，用户 14:23 点了表情看到记录是 14 点
+        // 会以为记的是通知时间；写「点击时」直接把语义讲清楚。
         views.setTextViewText(
             R.id.notification_subtitle,
-            "${String.format(Locale.CHINA, "%02d:00", hour)} · 点一个表情记录当下的心情"
+            "点一个表情，记到你点击的那一刻"
         )
 
         // 按当前心情目录填充槽位（不再是写死的 5 个内置心情）：
@@ -674,6 +677,18 @@ object Reminder {
                     }
                 }
             }
+            // 落库成功的即时反馈：告诉用户记录到底记到了几点几分。
+            // 此前点完表情毫无反馈，用户只能去翻日历核对，无法确认
+            // 记的是点击时刻还是通知发送时刻——这正是「感觉记错时间」的
+            // 一大来源。Toast 直接把落点写明白。
+            val mood = moods.firstOrNull { it.id == moodId } ?: defaultMoods.firstOrNull()
+            android.widget.Toast.makeText(
+                context,
+                "已记录 ${mood?.label ?: "心情"} · ${dateStr.substring(5)} ${String.format(
+                    Locale.CHINA, "%02d:00", hour
+                )}",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
         } catch (e: Exception) {
             android.util.Log.e("MoodReminder", "快速记录失败（$dateStr $hour 点）", e)
         }
