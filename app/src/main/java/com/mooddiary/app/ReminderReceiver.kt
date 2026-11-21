@@ -48,10 +48,12 @@ class ReminderReceiver : BroadcastReceiver() {
         if (moodId == 0) return
 
         // 点击时刻必须在 onReceive 当场取：若挪到 IO 协程里再取，
-        // 协程调度可能跨过整点边界（如 15:59:59 点击、16:00:01 才执行），
+        // 协程调度可能跨过整点/分钟边界（如 15:59:59 点击、16:00:01 才执行），
         // 记录就落到下一小时。当场取最接近真实点击瞬间。
         val nowDate = java.time.LocalDate.now()
-        val nowHour = java.time.LocalTime.now().hour
+        val nowTime = java.time.LocalTime.now()
+        val nowHour = nowTime.hour
+        val nowMinute = nowTime.minute
 
         val pending = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
@@ -59,7 +61,7 @@ class ReminderReceiver : BroadcastReceiver() {
                 // 记录的时刻 = 用户点击的时刻（上面当场捕获的），
                 // 而不是通知发送的时刻。
                 // （EXTRA_HOUR/EXTRA_DATE 仍是发送时刻，仅供下方取消通知定位用）
-                Reminder.recordQuickMood(context, nowHour, moodId, nowDate.toString())
+                Reminder.recordQuickMood(context, nowHour, nowMinute, moodId, nowDate.toString())
                 // 取消那条通知：必须用「发送时刻」算出的通知 id 才能取消到。
                 // 极旧版本的通知没有这两个 extra（hour=-1）：跳过取消，
                 // 但记录照常写——绝不能因为缺定位信息就不记录。

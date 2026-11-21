@@ -483,13 +483,28 @@ object Reminder {
             return "当前处于免打扰时段，本次不提醒（已续排下一次）"
         }
 
+        // 「已经记过了就别再提醒」——但判定粒度必须跟数据模型一致。
+        // 原先按「本小时是否已有记录」判定，而 v3 起同一小时内可以有多条，
+        // 那样会导致：14:00 记过一次后，14 点整点的提醒被永久跳过，
+        // 用户在 14 点再也没法收到提醒（要等到 15 点）。
+        // 现在只跳过「刚刚（同一分钟）已经记过」的情况——既避免刚记完就
+        // 被同一条提醒骚扰，又不影响同一小时内后续的提醒与记录。
+        val nowMinute = LocalTime.now().minute
         val recorded = runCatching {
             MoodDatabase.get(context).dao()
                 .findByDateHourSync(LocalDate.now().toString(), hour) != null
         }.getOrDefault(false)
         if (recorded) {
-            schedule(context)
-            return "当前小时（$hour 点）已记录过，本次不重复提醒（已续排下一次）"
+            // 该小时已有记录：仅当记录就在同一分钟内才算「刚记过」
+            val justRecorded = runCatching {
+                MoodDatabase.get(context).dao()
+                    .findMinutesByDateHourSync(LocalDate.now().toString(), hour)
+                    .contains(nowMinute)
+            }.getOrDefault(false)
+            if (justRecorded) {
+                schedule(context)
+                return "刚刚已记录过（${hour} 点 ${String.format(Locale.CHINA, "%02d", nowMinute)} 分），本次不重复提醒（已续排下一次）"
+            }
         }
 
         sendNotification(context, hour)
@@ -654,26 +669,30 @@ object Reminder {
      * 注：取消通知不在此方法内，由调用方用「发通知时刻」单独调用
      * [cancelQuickNotification]（通知 id 以发通知那天的 dayOfYear 计算）。
      */
-    fun recordQuickMood(context: Context, hour: Int, moodId: Int, dateStr: String) {
+    fun recordQuickMood(context: Context, hour: Int, minute: Int, moodId: Int, dateStr: String) {
         val db = MoodDatabase.get(context)
         val dao = db.dao()
         try {
             kotlinx.coroutines.runBlocking {
                 db.withTransaction {
-                    val existing = dao.findByDateHour(dateStr, hour)
-                    if (existing != null) {
-                        dao.update(existing.copy(moodId = moodId, updatedAt = System.currentTimeMillis()))
+                    // v3 起同一小时内可以有多条记录，快速记录是**新增**而非覆盖：
+                    // 覆盖会静默抹掉用户在同一小时里先前记下的心情与备注（数据损失）。
+                    // 这里只在「同一分钟已有记录」时更新那一条——那才是重复记录。
+                    val sameMinute = dao.findByDateHour(dateStr, hour)
+                        .firstOrNull { it.minute == minute }
+                    if (sameMinute != null) {
+                        dao.update(
+                            sameMinute.copy(moodId = moodId, updatedAt = System.currentTimeMillis())
+                        )
                     } else {
-                        try {
-                            dao.insert(MoodEntry(date = dateStr, hour = hour, moodId = moodId))
-                        } catch (e: android.database.sqlite.SQLiteConstraintException) {
-                            // 与应用内保存并发：行刚被别人插入。快速记录语义是
-                            // 「覆盖该时段」，回退为 update，绝不静默丢数据。
-                            val row = dao.findByDateHour(dateStr, hour)
-                            row?.let {
-                                dao.update(it.copy(moodId = moodId, updatedAt = System.currentTimeMillis()))
-                            }
-                        }
+                        dao.insert(
+                            MoodEntry(
+                                date = dateStr,
+                                hour = hour,
+                                minute = minute,
+                                moodId = moodId
+                            )
+                        )
                     }
                 }
             }
@@ -685,12 +704,16 @@ object Reminder {
             android.widget.Toast.makeText(
                 context,
                 "已记录 ${mood?.label ?: "心情"} · ${dateStr.substring(5)} ${String.format(
-                    Locale.CHINA, "%02d:00", hour
+                    Locale.CHINA, "%02d:%02d", hour, minute
                 )}",
                 android.widget.Toast.LENGTH_SHORT
             ).show()
         } catch (e: Exception) {
-            android.util.Log.e("MoodReminder", "快速记录失败（$dateStr $hour 点）", e)
+            android.util.Log.e(
+                "MoodReminder",
+                "快速记录失败（$dateStr ${String.format(Locale.CHINA, "%02d:%02d", hour, minute)}）",
+                e
+            )
         }
     }
 

@@ -449,7 +449,7 @@ fun SettingsPage(
             // —— 测试通知 ——
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
             Text(
-                "立即弹出一条测试通知，上面有表情可以直接点。\n点完会自动记录当前小时的心情，通知随即消失。",
+                "立即弹出一条测试通知，上面有表情可以直接点。\n点完会自动记录此刻的心情，通知随即消失。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

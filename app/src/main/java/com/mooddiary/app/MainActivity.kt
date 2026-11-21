@@ -101,11 +101,27 @@ import kotlin.math.roundToInt
 /** 备注长度上限，防止超长文本整段进内存与数据库 */
 const val MAX_NOTE_LENGTH = 500
 
-@Entity(tableName = "mood_entries", indices = [Index(value = ["date", "hour"], unique = true)])
+/**
+ * 一条心情记录。
+ *
+ * 精度到**分钟**：原先只有 hour，且 (date, hour) 唯一，一天只有 24 格、
+ * 同一小时记不了第二条（「一个小时内只能添加一次心情」）。
+ * 现在去掉唯一约束、增加 minute 字段，一小时内可记多条
+ * （如 14:05 记开心、14:50 记低落）。
+ *
+ * 索引改为普通索引 (date, hour, minute) —— 只为查询提速，不再做唯一约束：
+ * 即便同一分钟连记两条也应允许。
+ */
+@Entity(
+    tableName = "mood_entries",
+    indices = [Index(value = ["date", "hour", "minute"])]
+)
 data class MoodEntry(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val date: String,
     val hour: Int,
+    /** 分钟（0..59）。旧数据迁移时补 0，语义为「分钟未知」。 */
+    val minute: Int = 0,
     val moodId: Int,
     val note: String = "",
     val updatedAt: Long = System.currentTimeMillis()
@@ -122,15 +138,20 @@ sealed interface SaveOutcome {
 
 @Dao
 interface MoodDao {
-    @Query("SELECT * FROM mood_entries ORDER BY date DESC, hour DESC")
+    @Query("SELECT * FROM mood_entries ORDER BY date DESC, hour DESC, minute DESC, id DESC")
     fun observeAll(): kotlinx.coroutines.flow.Flow<List<MoodEntry>>
 
-    @Query("SELECT * FROM mood_entries WHERE date = :date AND hour = :hour LIMIT 1")
-    suspend fun findByDateHour(date: String, hour: Int): MoodEntry?
+    /** 某天某小时的所有记录（按分钟升序）。一小时内可有多条。 */
+    @Query("SELECT * FROM mood_entries WHERE date = :date AND hour = :hour ORDER BY minute ASC, id ASC")
+    suspend fun findByDateHour(date: String, hour: Int): List<MoodEntry>
 
     /** 同步版本：供 BroadcastReceiver 在 IO 线程调用（suspend 不便在 goAsync 里用） */
     @Query("SELECT id FROM mood_entries WHERE date = :date AND hour = :hour LIMIT 1")
     fun findByDateHourSync(date: String, hour: Int): Long?
+
+    /** 某天某小时的所有记录的分钟数（同步版，供 onTick 判断「刚记过」） */
+    @Query("SELECT minute FROM mood_entries WHERE date = :date AND hour = :hour")
+    fun findMinutesByDateHourSync(date: String, hour: Int): List<Int>
 
     /**
      * 只取出引用了「当前目录中不存在的心情」的记录。
@@ -161,17 +182,47 @@ interface MoodDao {
     suspend fun delete(entry: MoodEntry)
 }
 
-@Database(entities = [MoodEntry::class], version = 2, exportSchema = true)
+@Database(entities = [MoodEntry::class], version = 3, exportSchema = true)
 abstract class MoodDatabase : RoomDatabase() {
     abstract fun dao(): MoodDao
 
     companion object {
         @Volatile private var instance: MoodDatabase? = null
 
+        /**
+         * v2 → v3：新增 minute 列、去掉 (date, hour) 唯一约束。
+         *
+         * ⚠️ 这个迁移**必须显式注册**，否则 Room 找不到路径时会走
+         * fallbackToDestructiveMigrationFrom(1)——注意它不是「只匹配 v1」，
+         * 而是「起始版本 ≥1 都允许破坏性迁移」，于是 v2 用户的日记会被清空。
+         * Room 会优先使用显式迁移，注册了就不会走 fallback。
+         *
+         * 旧记录的 minute 补 0，语义是「分钟未知」：原先只有小时粒度，
+         * 迁移不能凭空造出分钟，谎称 14:00 反而会误导。
+         */
+        val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE mood_entries ADD COLUMN minute INTEGER NOT NULL DEFAULT 0"
+                )
+                // 旧唯一索引：同一小时只能一条，正是「一小时记不了第二次」的根源
+                db.execSQL("DROP INDEX IF EXISTS index_mood_entries_date_hour")
+                // 改为普通索引：只用于查询提速，不再限制唯一性
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_mood_entries_date_hour_minute " +
+                        "ON mood_entries(date, hour, minute)"
+                )
+            }
+        }
+
         fun get(context: android.content.Context): MoodDatabase = instance ?: synchronized(this) {
             Room.databaseBuilder(context.applicationContext, MoodDatabase::class.java, "mood_diary.db")
+                // v2 → v3 必须显式提供迁移（见 MIGRATION_2_3 注释）
+                .addMigrations(MIGRATION_2_3)
                 // 仅对 v1 保留破坏性迁移：v1 的建表语句已无处可考，且历史版本正是这样处理的。
-                // v2 往后的任何版本升级都必须显式提供 Migration，绝不会再清空用户日记。
+                // 注意：fallbackToDestructiveMigrationFrom(1) 的语义是「起始版本 ≥1 且
+                // 找不到迁移路径时都允许破坏性迁移」，不是「只匹配 v1」——所以 v2 往后的
+                // 任何版本都必须显式注册 Migration，否则会清空用户日记。
                 .fallbackToDestructiveMigrationFrom(1)
                 .build()
                 .also { instance = it }
@@ -185,7 +236,10 @@ abstract class MoodDatabase : RoomDatabase() {
  */
 interface MoodStore {
     fun observeAll(): kotlinx.coroutines.flow.Flow<List<MoodEntry>>
-    suspend fun findByDateHour(date: String, hour: Int): MoodEntry?
+    /** 某天某小时的所有记录（按分钟升序）。一小时内可有多条。 */
+    suspend fun findByDateHour(date: String, hour: Int): List<MoodEntry>
+    /** 精确到分钟的查询，用于定位某一条特定记录。 */
+    suspend fun findExact(date: String, hour: Int, minute: Int): MoodEntry?
     suspend fun insert(entry: MoodEntry)
     suspend fun update(entry: MoodEntry)
     suspend fun delete(entry: MoodEntry)
@@ -197,6 +251,8 @@ class RoomMoodStore(private val db: MoodDatabase) : MoodStore {
     private val dao = db.dao()
     override fun observeAll() = dao.observeAll()
     override suspend fun findByDateHour(date: String, hour: Int) = dao.findByDateHour(date, hour)
+    override suspend fun findExact(date: String, hour: Int, minute: Int): MoodEntry? =
+        dao.findByDateHour(date, hour).firstOrNull { it.minute == minute }
     override suspend fun insert(entry: MoodEntry) { dao.insert(entry) }
     override suspend fun update(entry: MoodEntry) { dao.update(entry) }
     override suspend fun delete(entry: MoodEntry) { dao.delete(entry) }
@@ -211,56 +267,65 @@ class RoomMoodStore(private val db: MoodDatabase) : MoodStore {
  * 旧的实现使用 `OnConflictStrategy.REPLACE` + 唯一索引，用户把一条记录的日期
  * 改成另一条记录已占用的时段时，SQLite 会先删掉冲突行再插入，导致那条记录
  * 连同备注被无声抹掉。现在改为显式冲突检测：由调用方决定是否覆盖。
+ *
+ * 冲突判定口径（v3 起）：精确到**分钟**。
+ * 同一小时内不同分钟是**两条独立记录**，互不冲突——这正是
+ * 「一个小时内只能记一次不合理」的修复点。只有目标时刻（date+hour+minute）
+ * 已被**另一条**记录占用时才冲突。
  */
 class MoodRepository(private val store: MoodStore) {
 
     fun observeAll(): kotlinx.coroutines.flow.Flow<List<MoodEntry>> = store.observeAll()
 
-    suspend fun findByDateHour(date: LocalDate, hour: Int): MoodEntry? =
+    /** 某天某小时的所有记录（按分钟升序） */
+    suspend fun findByDateHour(date: LocalDate, hour: Int): List<MoodEntry> =
         store.findByDateHour(date.toString(), hour)
 
-    private fun buildEntry(date: LocalDate, hour: Int, moodId: Int, note: String, old: MoodEntry?) =
-        MoodEntry(
-            id = old?.id ?: 0,
-            date = date.toString(),
-            hour = hour,
-            moodId = moodId,
-            note = note.trim().take(MAX_NOTE_LENGTH),
-            updatedAt = System.currentTimeMillis()
-        )
+    private fun buildEntry(
+        date: LocalDate, hour: Int, minute: Int, moodId: Int, note: String, old: MoodEntry?
+    ) = MoodEntry(
+        id = old?.id ?: 0,
+        date = date.toString(),
+        hour = hour,
+        minute = minute,
+        moodId = moodId,
+        note = note.trim().take(MAX_NOTE_LENGTH),
+        updatedAt = System.currentTimeMillis()
+    )
 
     /**
-     * 在同一事务内先查冲突再写入。目标时段已被**另一条**记录占用时返回
-     * [SaveOutcome.Conflict]，交由 UI 询问用户，而不是直接覆盖。
+     * 在同一事务内先查冲突再写入。目标时刻（date+hour+minute）已被**另一条**
+     * 记录占用时返回 [SaveOutcome.Conflict]，交由 UI 询问用户，而不是直接覆盖。
      * 编辑自身记录（id 相同）不算冲突。
      */
-    suspend fun save(date: LocalDate, hour: Int, moodId: Int, note: String, old: MoodEntry?): SaveOutcome =
-        store.transaction {
-            val existing = store.findByDateHour(date.toString(), hour)
-            if (existing != null && existing.id != old?.id) {
-                return@transaction SaveOutcome.Conflict(existing)
-            }
-            val entry = buildEntry(date, hour, moodId, note, old)
-            if (old == null) store.insert(entry) else store.update(entry)
-            SaveOutcome.Saved
+    suspend fun save(
+        date: LocalDate, hour: Int, minute: Int, moodId: Int, note: String, old: MoodEntry?
+    ): SaveOutcome = store.transaction {
+        val existing = store.findExact(date.toString(), hour, minute)
+        if (existing != null && existing.id != old?.id) {
+            return@transaction SaveOutcome.Conflict(existing)
         }
+        val entry = buildEntry(date, hour, minute, moodId, note, old)
+        if (old == null) store.insert(entry) else store.update(entry)
+        SaveOutcome.Saved
+    }
 
     /** 仅在用户于冲突弹窗中确认「覆盖」后调用：先删被覆盖的记录，再写入新记录。 */
     suspend fun overwrite(
-        date: LocalDate, hour: Int, moodId: Int, note: String, old: MoodEntry?, conflict: MoodEntry
+        date: LocalDate, hour: Int, minute: Int, moodId: Int, note: String,
+        old: MoodEntry?, conflict: MoodEntry
     ) = store.transaction {
         // 弹窗展示的是快照，从展示到用户点「覆盖」之间该行可能已被
         // 其它路径改写（如通知快速记录）。删除按主键匹配，会把用户
-        // 没见过的内容一起抹掉，所以这里按 (date,hour) 重读校验：
+        // 没见过的内容一起抹掉，所以这里按 (date,hour,minute) 重读校验：
         // - 行已不存在：无需删除，直接写入；
-        // - 行仍是用户确认时的那条（updatedAt 未变）：安全删除；
-        // - 内容已变化：保守起见仍覆盖该时段（用户已明确选择覆盖），
-        //   但以最新行为删除对象，避免按主键误删别的行。
-        val current = store.findByDateHour(date.toString(), hour)
+        // - 行仍是用户确认时的那条（id 一致）：安全删除；
+        // - 只删这一条，绝不牵连同一小时内其它分钟的记录。
+        val current = store.findExact(date.toString(), hour, minute)
         if (current != null && current.id == conflict.id) {
             store.delete(current)
         }
-        val entry = buildEntry(date, hour, moodId, note, old)
+        val entry = buildEntry(date, hour, minute, moodId, note, old)
         if (old == null) store.insert(entry) else store.update(entry)
     }
 
@@ -276,12 +341,14 @@ class MoodViewModel(application: Application) : AndroidViewModel(application) {
     val entries: StateFlow<List<MoodEntry>> = repo.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    suspend fun save(date: LocalDate, hour: Int, moodId: Int, note: String, old: MoodEntry?): SaveOutcome =
-        repo.save(date, hour, moodId, note, old)
+    suspend fun save(
+        date: LocalDate, hour: Int, minute: Int, moodId: Int, note: String, old: MoodEntry?
+    ): SaveOutcome = repo.save(date, hour, minute, moodId, note, old)
 
     suspend fun overwrite(
-        date: LocalDate, hour: Int, moodId: Int, note: String, old: MoodEntry?, conflict: MoodEntry
-    ) = repo.overwrite(date, hour, moodId, note, old, conflict)
+        date: LocalDate, hour: Int, minute: Int, moodId: Int, note: String,
+        old: MoodEntry?, conflict: MoodEntry
+    ) = repo.overwrite(date, hour, minute, moodId, note, old, conflict)
 
     fun delete(entry: MoodEntry) = viewModelScope.launch { repo.delete(entry) }
 
@@ -700,10 +767,27 @@ fun MoodDiaryTheme(
 private data class PendingConflict(
     val date: LocalDate,
     val hour: Int,
+    val minute: Int,
     val moodId: Int,
     val note: String,
     val old: MoodEntry?,
     val conflict: MoodEntry
+)
+
+/**
+ * 编辑目标。
+ *
+ * v3 起记录精确到分钟，且同一小时内可有多条，因此**不能再用「(date, hour)
+ * 找第一条」当编辑身份**——那样会编辑错记录、或把新记录落到别人的位置上。
+ * 现在的约定：
+ * - [entry] 非空 = 编辑这一条既有记录（身份是它的 id）
+ * - [entry] 为空 = 在 (date, hour, minute) 这个时刻**新增**一条
+ */
+private data class EditTarget(
+    val date: LocalDate,
+    val hour: Int,
+    val minute: Int,
+    val entry: MoodEntry?
 )
 
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
@@ -720,21 +804,29 @@ fun MoodDiaryApp(
     val entries by vm.entries.collectAsStateWithLifecycle()
     var month by rememberSaveable { mutableStateOf(YearMonth.now()) }
     var hourSheetDate by remember { mutableStateOf<LocalDate?>(null) }
-    var editTarget by remember { mutableStateOf<Triple<LocalDate, Int, MoodEntry?>?>(null) }
+    var editTarget by remember { mutableStateOf<EditTarget?>(null) }
     var pendingConflict by remember { mutableStateOf<PendingConflict?>(null) }
     val scope = rememberCoroutineScope()
 
-    fun openEdit(date: LocalDate, hour: Int) {
-        editTarget = Triple(date, hour, entries.firstOrNull { it.date == date.toString() && it.hour == hour })
+    /** 在 (date, hour, minute) 这个时刻**新增**一条记录 */
+    fun openNew(date: LocalDate, hour: Int, minute: Int) {
+        editTarget = EditTarget(date, hour, minute, null)
+    }
+
+    /** 编辑既有的某一条记录（身份是 entry.id，不会误伤同小时的其它记录） */
+    fun openEntry(entry: MoodEntry) {
+        val d = runCatching { LocalDate.parse(entry.date) }.getOrNull() ?: return
+        editTarget = EditTarget(d, entry.hour, entry.minute, entry)
     }
 
     // 点击通知跳转：直接打开记录弹窗。
-    // 记录的时刻 = 用户点击的时刻（LocalDate.now() / LocalTime.now().hour），
+    // 记录的时刻 = 用户点击的时刻（LocalDate.now() / LocalTime.now()），
     // 而不是通知发出的那个整点/那天。即便 23:00 的通知拖到 00:30 才点，
-    // 弹窗也落在用户点击的当下，保存后记的是点击时刻。
+    // 弹窗也落在用户点击的当下，保存后记的是点击时刻（精确到分钟）。
     LaunchedEffect(openHour.value) {
         openHour.value?.let {
-            openEdit(LocalDate.now(), LocalTime.now().hour)
+            val now = LocalTime.now()
+            openNew(LocalDate.now(), now.hour, now.minute)
             openHour.value = null
         }
     }
@@ -832,7 +924,12 @@ fun MoodDiaryApp(
         // 添加按钮回到右下角，但保留胶囊形状
         floatingActionButton = {
             Surface(
-                onClick = { openEdit(LocalDate.now(), LocalTime.now().hour) },
+                // 手动新增：记的是「此刻」（精确到分钟），不是某个整点。
+                // 同一分钟已有一条也不算冲突——新增就是新增。
+                onClick = {
+                    val now = LocalTime.now()
+                    openNew(LocalDate.now(), now.hour, now.minute)
+                },
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.primary,
                 shadowElevation = 0.dp,
@@ -866,16 +963,18 @@ fun MoodDiaryApp(
                     open = { d ->
                         when (settings.calendarTapAction) {
                             CalendarTapAction.OPEN_DAY_BOARD -> hourSheetDate = d
-                            CalendarTapAction.QUICK_LOG_NOW ->
-                                openEdit(LocalDate.now(), LocalTime.now().hour)
+                            CalendarTapAction.QUICK_LOG_NOW -> {
+                                // 日历上「直接记录此刻」：记的是此刻（精确到分钟）
+                                val now = LocalTime.now()
+                                openNew(LocalDate.now(), now.hour, now.minute)
+                            }
                         }
                     }
                 )
                 1 -> RecordsPage(entries) { e ->
-                    // 数据库里的 date 是文本；异常数据（迁移残留/外部写入）不能
-                    // 让整个记录页崩溃，与 computeMonthStats 的 runCatching 口径一致
-                    val d = runCatching { LocalDate.parse(e.date) }.getOrNull()
-                    if (d != null) openEdit(d, e.hour)
+                    // 编辑身份是这条记录本身（id + 分钟），
+                    // 不能只按 (date, hour) 找——同一小时现在可能有多条。
+                    openEntry(e)
                 }
                 2 -> StatsPage(month, entries, { month = it })
                 else -> SettingsPage(
@@ -896,23 +995,28 @@ fun MoodDiaryApp(
         HourMoodSheet(
             d,
             entries.filter { it.date == d.toString() },
-            onPick = { h, _ -> openEdit(d, h) },
+            // 点格子 = 在该小时**新增**一条（默认整点 00 分）。
+            // 该小时已有的记录在格子里以数量角标展示，点角标可展开查看/编辑。
+            onPick = { h -> openNew(d, h, 0) },
+            onOpenEntry = { e -> openEntry(e) },
             onClose = { hourSheetDate = null }
         )
     }
 
-    editTarget?.let { (d, h, entry) ->
+    editTarget?.let { target ->
+        val entry = target.entry
         MoodDialog(
-            d, h, entry,
+            target.date, target.hour, target.minute, entry,
             defaultMoodId = settings.defaultMoodId,
             onDismiss = { editTarget = null },
-            onSave = { dt, hh, m, n ->
-                val old = editTarget?.third
+            onSave = { dt, hh, mm, m, n ->
+                val old = entry
                 editTarget = null
                 scope.launch {
-                    when (val r = vm.save(dt, hh, m, n, old)) {
+                    when (val r = vm.save(dt, hh, mm, m, n, old)) {
                         is SaveOutcome.Saved -> Unit
-                        is SaveOutcome.Conflict -> pendingConflict = PendingConflict(dt, hh, m, n, old, r.existing)
+                        is SaveOutcome.Conflict ->
+                            pendingConflict = PendingConflict(dt, hh, mm, m, n, old, r.existing)
                     }
                 }
             },
@@ -926,7 +1030,9 @@ fun MoodDiaryApp(
             onCancel = { pendingConflict = null },
             onOverwrite = {
                 pendingConflict = null
-                scope.launch { vm.overwrite(p.date, p.hour, p.moodId, p.note, p.old, p.conflict) }
+                scope.launch {
+                    vm.overwrite(p.date, p.hour, p.minute, p.moodId, p.note, p.old, p.conflict)
+                }
             }
         )
     }
@@ -1448,7 +1554,7 @@ private fun NavItem(
 private fun ConflictDialog(pending: PendingConflict, onCancel: () -> Unit, onOverwrite: () -> Unit) {
     val m = moodOf(pending.conflict.moodId)
     val slot = pending.date.format(DateTimeFormatter.ofPattern("yyyy年MM月dd日")) +
-        " " + String.format(Locale.CHINA, "%02d:00", pending.hour)
+        " " + String.format(Locale.CHINA, "%02d:%02d", pending.hour, pending.minute)
     AlertDialog(
         onDismissRequest = onCancel,
         title = { Text("该时段已有记录") },
@@ -1486,7 +1592,13 @@ fun CalendarPage(
     open: (LocalDate) -> Unit
 ) {
     val latestByDay = remember(entries) {
-        entries.groupBy { it.date }.mapValues { (_, list) -> list.maxByOrNull { it.hour } }
+        // 每天取「最新一条」作为日历热力图的代表色。
+        // 比较键必须含分钟：同一小时内可有多条，只比 hour 会拿到较早的那条。
+        entries.groupBy { it.date }.mapValues { (_, list) ->
+            list.maxWithOrNull(
+                compareBy<MoodEntry> { it.hour * 60 + it.minute }.thenBy { it.id }
+            )
+        }
     }
     val weekLabels = if (weekStart == WeekStart.SUNDAY)
         listOf("日", "一", "二", "三", "四", "五", "六")
@@ -1654,10 +1766,16 @@ fun CalendarCell(
 fun HourMoodSheet(
     date: LocalDate,
     dayEntries: List<MoodEntry>,
-    onPick: (Int, MoodEntry?) -> Unit,
+    /** 点某个小时 → 在该小时新增一条 */
+    onPick: (Int) -> Unit,
+    /** 点某条具体记录 → 编辑它 */
+    onOpenEntry: (MoodEntry) -> Unit,
     onClose: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // 展开查看的某个小时；null = 只看 24 格总览
+    var expandedHour by remember { mutableStateOf<Int?>(null) }
+
     ModalBottomSheet(onDismissRequest = onClose, sheetState = sheetState) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp)) {
             Text(
@@ -1666,11 +1784,75 @@ fun HourMoodSheet(
                 fontWeight = FontWeight.Bold
             )
             Text(
-                "点一个小时，记录那个时刻的心情",
+                if (expandedHour == null) "点一个小时，记录那个时刻的心情；同一小时可以记多条"
+                else "这个小时已有 ${dayEntries.count { it.hour == expandedHour }} 条记录",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(12.dp))
+
+            // —— 展开态：列出该小时的每一条记录 ——
+            val expanded = expandedHour
+            if (expanded != null) {
+                val list = dayEntries.filter { it.hour == expanded }.sortedBy { it.minute }
+                LazyColumn(
+                    modifier = Modifier.height(360.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(list, key = { it.id }) { e ->
+                        val m = moodOf(e.moodId)
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(m.color.copy(alpha = 0.18f))
+                                .clickable { onOpenEntry(e) }
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                String.format(Locale.CHINA, "%02d:%02d", e.hour, e.minute),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.width(56.dp)
+                            )
+                            Text(m.emoji, fontSize = 20.sp)
+                            Spacer(Modifier.width(8.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(m.label, fontWeight = FontWeight.Medium)
+                                if (e.note.isNotBlank()) {
+                                    Text(
+                                        e.note,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            Text(
+                                "编辑",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                    item {
+                        Spacer(Modifier.height(4.dp))
+                        OutlinedButton(
+                            onClick = { onPick(expanded) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("再记一条 ${String.format(Locale.CHINA, "%02d", expanded)} 点的") }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = { expandedHour = null }, modifier = Modifier.fillMaxWidth()) {
+                    Text("← 返回 24 小时总览")
+                }
+                return@ModalBottomSheet
+            }
+
+            // —— 总览：24 格，每格显示该小时最新一条 + 条数角标 ——
             LazyVerticalGrid(
                 columns = GridCells.Fixed(4),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -1678,7 +1860,11 @@ fun HourMoodSheet(
                 modifier = Modifier.height(440.dp)
             ) {
                 items((0..23).toList()) { h ->
-                    val e = dayEntries.firstOrNull { it.hour == h }
+                    val hourEntries = dayEntries.filter { it.hour == h }
+                    // 该小时的最新一条（按分钟排序取末尾）
+                    val e = hourEntries.maxWithOrNull(
+                        compareBy<MoodEntry> { it.minute }.thenBy { it.id }
+                    )
                     val m = e?.let { moodOf(it.moodId) }
                     val onColor =
                         if (m != null && m.color.luminance() < .55f) Color.White
@@ -1689,11 +1875,29 @@ fun HourMoodSheet(
                             .clip(RoundedCornerShape(10.dp))
                             .background(m?.color ?: MaterialTheme.colorScheme.surfaceVariant)
                             .pressBounce(pressedScale = 0.90f)
-                            .clickable { onPick(h, e) }
+                            .clickable {
+                                // 已有记录 → 展开该小时全部；没有 → 直接新增
+                                if (hourEntries.isEmpty()) onPick(h) else expandedHour = h
+                            }
                             .padding(vertical = 10.dp)
                             .fillMaxWidth()
                     ) {
-                        Text(String.format(Locale.CHINA, "%02d:00", h), fontSize = 11.sp, color = onColor)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                String.format(Locale.CHINA, "%02d:00", h),
+                                fontSize = 11.sp,
+                                color = onColor
+                            )
+                            if (hourEntries.size > 1) {
+                                Spacer(Modifier.width(3.dp))
+                                Text(
+                                    "×${hourEntries.size}",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = onColor.copy(alpha = 0.9f)
+                                )
+                            }
+                        }
                         Text(if (m != null) m.emoji else "＋", fontSize = 20.sp)
                         Text(
                             if (m != null) m.label else "未记录",
@@ -1743,7 +1947,7 @@ fun RecordsPage(entries: List<MoodEntry>, open: (MoodEntry) -> Unit) {
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text(
-                            "${e.date.substring(5)} ${String.format(Locale.CHINA, "%02d:00", e.hour)}",
+                            "${e.date.substring(5)} ${String.format(Locale.CHINA, "%02d:%02d", e.hour, e.minute)}",
                             fontWeight = FontWeight.Bold
                         )
                         Text(
@@ -1906,7 +2110,12 @@ internal fun computeMonthStats(entries: List<MoodEntry>, month: YearMonth): Mont
         entryCounts[e.moodId] = (entryCounts[e.moodId] ?: 0) + 1
 
         val prev = latestByDay[e.date]
-        if (prev == null || e.hour > prev.hour) latestByDay[e.date] = e
+        // 比较必须含分钟：同一小时内现在可以有多条，只比 hour 会拿到
+        // 列表里较早的那条，日代表就选错了。以 id 兜底同分钟的先后。
+        if (prev == null ||
+            e.hour * 60 + e.minute > prev.hour * 60 + prev.minute ||
+            (e.hour == prev.hour && e.minute == prev.minute && e.id > prev.id)
+        ) latestByDay[e.date] = e
     }
 
     // —— 全页唯一口径：每天只取「最新一条」——
@@ -2206,19 +2415,22 @@ fun EmptyState(title: String, subtitle: String) {
 fun MoodDialog(
     date: LocalDate,
     hour: Int,
+    minute: Int,
     entry: MoodEntry?,
     defaultMoodId: Int = 5,
     onDismiss: () -> Unit,
-    onSave: (LocalDate, Int, Int, String) -> Unit,
+    onSave: (LocalDate, Int, Int, Int, String) -> Unit,
     onDelete: () -> Unit
 ) {
     val context = LocalContext.current
-    // 关键：remember 的 key 必须包含日期与小时。
-    // 否则连续打开两个都无记录的时段时（entry 均为 null），
+    // 关键：remember 的 key 必须包含日期、小时与分钟。
+    // 否则连续打开两个不同时刻的新记录时（entry 均为 null），
     // remember 不会重置，上一段输入的心情/备注会残留到下一次弹窗。
     var d by remember(entry?.id, date) { mutableStateOf(date) }
-    var selected by remember(entry?.id, date, hour) { mutableIntStateOf(entry?.moodId ?: defaultMoodId) }
-    var note by remember(entry?.id, date, hour) { mutableStateOf(entry?.note ?: "") }
+    var mi by remember(entry?.id, date, hour, minute) { mutableIntStateOf(minute) }
+    var selected by remember(entry?.id, date, hour, minute) { mutableIntStateOf(entry?.moodId ?: defaultMoodId) }
+    var note by remember(entry?.id, date, hour, minute) { mutableStateOf(entry?.note ?: "") }
+    var minutePickerOpen by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -2239,11 +2451,20 @@ fun MoodDialog(
                 ) { Text("日期：${d.format(DateTimeFormatter.ofPattern("yyyy年MM月dd日"))}") }
 
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    "时间：${String.format(Locale.CHINA, "%02d:00-%02d:59", hour, hour)}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                // 时间：精确到分钟，可点开调整。
+                // 旧记录迁移后 minute=0，这里标注「分钟未知」而不是谎称 14:00。
+                OutlinedButton(
+                    onClick = { minutePickerOpen = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        if (entry != null && entry.minute == 0 && entry.hour == hour && minute == 0) {
+                            "时间：${String.format(Locale.CHINA, "%02d:00", hour)}（历史记录，分钟未知）"
+                        } else {
+                            "时间：${String.format(Locale.CHINA, "%02d:%02d", hour, mi)}"
+                        }
+                    )
+                }
 
                 Spacer(Modifier.height(10.dp))
                 Text("心情是？")
@@ -2300,7 +2521,7 @@ fun MoodDialog(
                 )
             }
         },
-        confirmButton = { TextButton(onClick = { onSave(d, hour, selected, note) }) { Text("保存") } },
+        confirmButton = { TextButton(onClick = { onSave(d, hour, mi, selected, note) }) { Text("保存") } },
         dismissButton = {
             Row {
                 if (entry != null) {
@@ -2313,6 +2534,34 @@ fun MoodDialog(
             }
         }
     )
+
+    // 分钟选择器：0..59，用数字键盘式的网格，比滑杆更精确
+    if (minutePickerOpen) {
+        AlertDialog(
+            onDismissRequest = { minutePickerOpen = false },
+            title = { Text("选择分钟") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        (0..59).forEach { mm ->
+                            FilterChip(
+                                selected = mm == mi,
+                                onClick = { mi = mm; minutePickerOpen = false },
+                                label = { Text(String.format(Locale.CHINA, "%02d", mm)) },
+                                modifier = Modifier.pressBounce(pressedScale = 0.92f)
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { minutePickerOpen = false }) { Text("取消") }
+            }
+        )
+    }
 }
 
 @Composable

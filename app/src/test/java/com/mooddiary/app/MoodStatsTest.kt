@@ -21,6 +21,9 @@ class MoodStatsTest {
     private fun entry(date: LocalDate, hour: Int, moodId: Int) =
         MoodEntry(date = date.toString(), hour = hour, moodId = moodId)
 
+    private fun entry(date: LocalDate, hour: Int, minute: Int, moodId: Int) =
+        MoodEntry(date = date.toString(), hour = hour, minute = minute, moodId = moodId)
+
     private fun compute(entries: List<MoodEntry>) = computeMonthStats(entries, month)
 
     @Test
@@ -103,6 +106,34 @@ class MoodStatsTest {
         val st = compute(entries)
         assertEquals(1, st.dailyScores.size)
         assertEquals(1.0f, st.dailyScores.first().second, 0.001f)
+    }
+
+    /**
+     * v3：同一小时内可以有多条记录，「每天最新一条」必须按**分钟**比较。
+     * 只比 hour 会拿到列表里较早的那条，日代表就选错了。
+     */
+    @Test
+    fun `同一小时内多条时取分钟最晚的那条作为日代表`() {
+        // 同一天同一小时：14:05 开心(5)、14:50 生气(1)。日代表应是 14:50 的生气(1)。
+        val entries = listOf(
+            entry(LocalDate.of(2026, 9, 26), 14, 5, 5),
+            entry(LocalDate.of(2026, 9, 26), 14, 50, 1)
+        )
+        val st = compute(entries)
+        assertEquals(1, st.dailyScores.size)
+        assertEquals("日代表应取分钟最晚的那条", 1.0f, st.dailyScores.first().second, 0.001f)
+    }
+
+    /** 同一小时记多条，记录天数仍为 1，但记录次数应累加。 */
+    @Test
+    fun `同一小时多条时记录天数不翻倍`() {
+        val entries = listOf(
+            entry(LocalDate.of(2026, 9, 26), 14, 5, 5),
+            entry(LocalDate.of(2026, 9, 26), 14, 50, 1)
+        )
+        val st = compute(entries)
+        assertEquals("记录天数仍为一天", 1, st.dayTotal)
+        assertEquals("记录次数应计两条", 2, st.entryTotal)
     }
 }
 
